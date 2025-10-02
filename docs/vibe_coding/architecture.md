@@ -134,59 +134,102 @@ Model financial statement concepts explicitly:
 **Rationale**: Code should reflect the financial reporting domain, not just technical structures.
 
 ### 7. **Specification-Based Validation**
-All parameters defined in `config/types.yaml` must be validated against the specification:
-- **Strict Validation**: Reject invalid parameter values immediately
-- **Discoverability**: Provide helper methods to list available values
+All parameters defined in `config/types.yaml` must be validated against the specification using **Pydantic Settings** for type-safe, automatic configuration management:
+
+- **Automatic Loading**: Config loaded from YAML using `pydantic-settings`
+- **Type-Safe Validation**: Pydantic field validators ensure correctness
+- **Discoverability**: Helper classes expose available values
 - **Single Source of Truth**: `types.yaml` is the canonical reference
 
-**Implementation Requirements**:
+**Architecture**:
 
-1. **Input Validation**: Any function accepting `pblntf_detail_ty`, `corp_cls`, or other spec parameters MUST validate against `types.yaml`:
-   ```python
-   def search_filings(stock_code: str, report_type: str):
-       """Search filings by report type."""
-       if not ReportTypes.is_valid(report_type):
-           raise ValueError(
-               f"Invalid report_type: {report_type}. "
-               f"Use ReportTypes.list_available() to see valid values."
-           )
-   ```
+```python
+# 1. Config Layer: Pydantic Settings auto-loads YAML
+from pydantic_settings import BaseSettings
+from typing import Dict
 
-2. **Discovery Methods**: Every validated parameter MUST have a corresponding discovery method:
-   ```python
-   class ReportTypes:
-       @staticmethod
-       def list_available() -> Dict[str, str]:
-           """Return all valid report types with descriptions."""
-           return {...}  # Loaded from config/types.yaml
-       
-       @staticmethod
-       def list_periodic_reports() -> List[str]:
-           """Return periodic report types (A001, A002, A003)."""
-           return ["A001", "A002", "A003"]
-       
-       @staticmethod
-       def get_description(code: str) -> str:
-           """Get human-readable description for report type code."""
-           return "사업보고서"  # For A001
-   ```
+class ReportTypesConfig(BaseSettings):
+    """Auto-loaded from config/types.yaml."""
+    pblntf_detail_ty: Dict[str, str]
+    corp_cls: Dict[str, str]
+    rm: Dict[str, str]
+    
+    model_config = SettingsConfigDict(
+        yaml_file='config/types.yaml',
+        yaml_file_encoding='utf-8'
+    )
+    
+    def is_valid_report_type(self, code: str) -> bool:
+        return code in self.pblntf_detail_ty
 
-3. **User-Facing Documentation**: CLI and API should expose discovery commands:
-   ```bash
-   # CLI example
-   dart-fss-text types list
-   dart-fss-text types describe A001
-   
-   # Python API example
-   from dart_fss_text import ReportTypes
-   print(ReportTypes.list_available())
-   ```
+# Singleton instance
+def get_config() -> ReportTypesConfig:
+    """Lazy-loaded singleton."""
+    ...
 
-**Rationale**: 
-- **Prevents silent failures**: Invalid parameters fail fast with clear error messages
-- **Improves discoverability**: Users can explore available options programmatically
-- **Maintains consistency**: Single YAML source prevents code/spec drift
-- **Better UX**: Users don't need to memorize 60+ report codes
+
+# 2. Validation Layer: Reusable field validators
+def validate_report_types(codes: List[str]) -> List[str]:
+    """Validate report type codes against config."""
+    config = get_config()
+    invalid = [c for c in codes if not config.is_valid_report_type(c)]
+    if invalid:
+        raise ValueError(f"Invalid codes: {invalid}")
+    return codes
+
+
+# 3. Model Layer: Pydantic models with validators
+class SearchFilingsRequest(BaseModel):
+    stock_code: str
+    report_types: List[str]
+    
+    # Apply validator
+    _validate = field_validator('report_types')(validate_report_types)
+
+
+# 4. Discovery Layer: Helper classes
+class ReportTypes:
+    @staticmethod
+    def list_available() -> Dict[str, str]:
+        return get_config().pblntf_detail_ty.copy()
+    
+    @staticmethod
+    def list_by_category(prefix: str) -> Dict[str, str]:
+        all_types = get_config().pblntf_detail_ty
+        return {k: v for k, v in all_types.items() 
+                if k.startswith(prefix)}
+
+
+# 5. Usage: Clean and automatic
+def search_filings(stock_code: str, report_types: List[str]):
+    # Validate via Pydantic model
+    request = SearchFilingsRequest(
+        stock_code=stock_code,
+        report_types=report_types  # Auto-validated!
+    )
+    # Proceed with guaranteed-valid inputs
+    ...
+```
+
+**Benefits**:
+- **No manual path handling**: Pydantic Settings resolves config paths automatically
+- **Type safety**: Config fields are typed and validated
+- **Automatic validation**: Field validators run on model creation
+- **Easy testing**: Override config in tests with `model_config`
+- **Self-documenting**: Field descriptions become API documentation
+- **Better errors**: Pydantic provides detailed validation errors with context
+
+**User-Facing Discovery**:
+```bash
+# CLI commands
+dart-fss-text types list
+dart-fss-text types describe A001
+
+# Python API
+from dart_fss_text import ReportTypes
+print(ReportTypes.list_available())
+print(ReportTypes.get_description('A001'))  # "사업보고서"
+```
 
 ---
 
