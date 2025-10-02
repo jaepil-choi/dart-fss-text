@@ -248,3 +248,5 @@ pip-selfcheck.json
 sandbox/
 sandbox.py
 sandbox.ipynb
+
+data/
