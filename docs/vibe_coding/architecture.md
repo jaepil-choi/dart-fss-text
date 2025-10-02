@@ -62,6 +62,7 @@
 #### 2. **Business Logic Layer**
    - **Purpose**: Core processing and orchestration
    - **Components**:
+     - `CorpListManager`: Manage corporation list cache and stock_code → corp_code mapping
      - `FilingSearchService`: Search and filter filings using dart-fss
      - `DocumentParserService`: Parse XML into structured sections
      - `MetadataExtractor`: Extract and validate PIT-critical metadata
@@ -462,6 +463,27 @@ This ensures backtesting integrity—no future information leaks into historical
 
 ## File System Structure
 
+### Corporation List Cache
+
+```
+data/
+  corp_list.csv           # Cached corporation list (3,901 listed stocks)
+```
+
+**Structure** (11 columns):
+- `corp_code`, `corp_name`, `corp_eng_name`, `stock_code`, `modify_date`
+- `corp_cls`, `market_type`, `sector`, `product` (sometimes null)
+- `trading_halt`, `issue` (rarely populated)
+
+**Purpose**: Fast stock_code → corp_code lookup without DART API call
+
+**Refresh Policy**:
+- Generated on first pipeline run if missing
+- Refreshed weekly (configurable)
+- Force refresh: `pipeline.refresh_corp_list()`
+
+**Verified in**: Experiment 5 ([experiments.md](experiments.md#experiment-5), [FINDINGS.md](FINDINGS.md#experiment-5))
+
 ### Raw XML Storage
 
 ```
@@ -533,6 +555,7 @@ src/
     
     services/
       __init__.py
+      corp_list_manager.py         # CorpListManager (cache management)
       filing_search.py             # FilingSearchService
       document_parser.py           # DocumentParserService
       metadata_extractor.py        # MetadataExtractor
@@ -614,7 +637,66 @@ class QuarterlyReportParser(ParsingStrategy):
 
 **Benefits**: Extensible to new document types without modifying core logic.
 
-### 3. **Direct dart-fss Usage**
+### 3. **Corporation List Manager**
+Caching layer for stock_code → corp_code mapping:
+
+```python
+from pathlib import Path
+from typing import Optional, Dict
+import pandas as pd
+import dart_fss
+
+class CorpListManager:
+    """
+    Manage corporation list with CSV caching.
+    
+    Rationale:
+    - dart-fss.get_corp_list() loads 114K+ corps (~10s API call)
+    - Users provide stock codes, DART API needs corp codes
+    - Cache to CSV enables instant lookup without repeated API calls
+    - Validated in Experiment 5: 3,901 listed stocks successfully cached
+    """
+    
+    def __init__(self, cache_path: Path = Path("data/corp_list.csv")):
+        self._cache_path = cache_path
+        self._corp_list: Optional[dart_fss.CorpList] = None
+        self._lookup: Dict[str, str] = {}  # stock_code -> corp_code
+    
+    def load(self, force_refresh: bool = False) -> None:
+        """Load from cache or fetch from DART API."""
+        if not force_refresh and self._cache_path.exists():
+            # Fast path: Load from CSV
+            df = pd.read_csv(self._cache_path)
+            self._lookup = df.set_index('stock_code')['corp_code'].to_dict()
+        else:
+            # Slow path: Fetch from DART API
+            self._corp_list = dart_fss.get_corp_list()
+            listed = [c for c in self._corp_list.corps if c.stock_code]
+            
+            # Save to CSV
+            corp_data = [corp.to_dict() for corp in listed]
+            df = pd.DataFrame(corp_data)
+            self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+            df.to_csv(self._cache_path, index=False, encoding='utf-8-sig')
+            
+            self._lookup = df.set_index('stock_code')['corp_code'].to_dict()
+    
+    def get_corp_code(self, stock_code: str) -> str:
+        """Convert stock_code to corp_code."""
+        if stock_code not in self._lookup:
+            raise ValueError(f"Stock code not found: {stock_code}")
+        return self._lookup[stock_code]
+```
+
+**Benefits**:
+- **Performance**: CSV load (~100ms) vs API call (~10s)
+- **Offline operation**: Works without DART API access
+- **Validated data**: 100% success rate in Experiment 5
+- **Zero duplicates**: Verified unique stock_codes and corp_codes
+
+**See**: [experiments.md Phase 2](experiments.md#phase-2-corporation-list-mapping) for validation details
+
+### 4. **Direct dart-fss Usage**
 Services use dart-fss directly rather than through an adapter:
 
 ```python
@@ -646,7 +728,7 @@ class DownloadService:
 
 **Rationale**: dart-fss IS the adapter layer for DART API. Adding another layer would be over-engineering.
 
-### 4. **Facade Pattern** (API Layer)
+### 5. **Facade Pattern** (API Layer)
 Simplified interface for complex subsystems:
 
 ```python

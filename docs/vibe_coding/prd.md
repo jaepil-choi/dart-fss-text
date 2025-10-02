@@ -141,6 +141,32 @@ for section in sections:
 
 > **Technical Details**: For system architecture, data models, and technical design patterns, see **[architecture.md](architecture.md)**.
 
+### Phase 0: Corporation List Management (Foundation)
+
+**Before** any discovery or download operations can begin, we must establish the **stock_code → corp_code mapping**.
+
+1. **Corporation List Caching**
+   - **Purpose**: Build lookup table for converting user-provided stock codes (6 digits) to DART corp codes (8 digits)
+   - **Source**: `dart_fss.get_corp_list()` returns all 114,106+ corporations from DART
+   - **Filter**: Extract only listed stocks (3,901 corporations with non-null `stock_code`)
+   - **Storage**: Save to `data/corp_list.csv` for fast startup and offline operation
+   - **Refresh Strategy**: Load from cache on startup; refresh weekly or on-demand
+
+2. **Schema** (11 columns from DART API):
+   - **Always present**: corp_code, corp_name, stock_code, modify_date
+   - **Sometimes present**: corp_cls (market), sector, product (70.9% of corps)
+   - **Validation**: Verified in Experiment 5 (see [experiments.md](experiments.md#experiment-5))
+
+3. **Why This is Necessary**:
+   - Users provide stock codes (e.g., "005930" for Samsung)
+   - DART API requires corp codes (e.g., "00126380")
+   - `dart-fss` provides `find_by_stock_code()` but loads entire corp list each time (~10s)
+   - **Caching eliminates repeated API calls** and enables instant lookups
+
+**Implementation**: `CorpListManager` service (see [architecture.md](architecture.md))
+
+---
+
 ### Phase 1: Discovery & Download Pipeline (MVP)
 
 1. **Filing Discovery & Filtering**
@@ -148,7 +174,9 @@ for section in sections:
      - `stock_codes` (List[str], mandatory): Company stock codes (e.g., ["005930", "000660"])
      - `start_date`, `end_date` (str): Date range for filing search
      - `report_types` (List[str]): Which reports to fetch (see Report Types catalog below)
-   - Leverage dart-fss for company code lookup and API authentication
+   - **Prerequisite**: Corporation list must be loaded (Phase 0)
+   - Use `CorpListManager` to convert stock_codes → corp_codes
+   - Leverage dart-fss for filing search with proper `pblntf_detail_ty` parameter
    - Search filings that match all filters
 
 2. **Catalog & Discovery APIs**

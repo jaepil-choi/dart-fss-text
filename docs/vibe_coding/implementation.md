@@ -109,6 +109,70 @@ if stock_code == "005930" and report_type == "annual":
 
 ## Development Workflow
 
+### Pipeline Initialization Workflow
+
+**Before any discovery/download operations**, the corporation list cache must be initialized:
+
+```
+┌──────────────────────┐
+│ Pipeline Starts      │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ Check corp_list.csv  │
+│ exists?              │
+└──────────┬───────────┘
+           │
+     ┌─────┴─────┐
+     │           │
+    Yes          No
+     │           │
+     │           ▼
+     │  ┌──────────────────────┐
+     │  │ Call DART API        │
+     │  │ dart.get_corp_list() │
+     │  │ (~10 seconds)        │
+     │  └──────────┬───────────┘
+     │             │
+     │             ▼
+     │  ┌──────────────────────┐
+     │  │ Filter listed stocks │
+     │  │ (stock_code != null) │
+     │  └──────────┬───────────┘
+     │             │
+     │             ▼
+     │  ┌──────────────────────┐
+     │  │ Save to CSV          │
+     │  │ (3,901 rows)         │
+     │  └──────────┬───────────┘
+     │             │
+     └─────────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ Load CSV to memory   │
+│ Build lookup dict    │
+│ (~100ms)             │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ Ready for Discovery  │
+│ stock_code -> corp   │
+└──────────────────────┘
+```
+
+**Rationale** (validated in Experiment 5):
+- **Performance**: CSV load (100ms) vs API call (10s) = 100x faster
+- **Reliability**: Offline operation when DART API is slow/unavailable
+- **Data Quality**: All 3,901 listed stocks successfully cached with 0 duplicates
+- **Completeness**: 70.9% have full metadata (sector, product, corp_cls)
+
+**See**: [experiments.md Phase 2](experiments.md#phase-2-corporation-list-mapping) and [FINDINGS.md](FINDINGS.md#phase-2-corporation-list-mapping)
+
+---
+
 ### Standard Feature Development Process
 
 ```
