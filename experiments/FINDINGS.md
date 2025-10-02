@@ -324,5 +324,161 @@ When implementing the parser module:
 
 ---
 
+## Phase 2: Corporation List Mapping
+
+**Date**: 2025-10-03
+
+### Experiment 5: Listed Corporations and Stock Code Mapping
+
+Successfully retrieved and mapped all listed corporations from DART, creating the essential **stock_code → corp_code** mapping required for our discovery service.
+
+#### Summary Statistics:
+```
+Total corporations in DART: 114,106
+- Listed stocks:   3,901 (3.4%)
+- Unlisted corps: 110,205 (96.6%)
+```
+
+#### Market Distribution (corp_cls):
+```
+KOSDAQ (K): 1,802 companies (65.2%)
+KOSPI (Y):    848 companies (30.7%)
+KONEX (N):    116 companies (4.2%)
+Missing:    1,135 companies (29.1%)
+```
+
+#### Corp Object Schema (11 columns):
+
+**Always Available (100% non-null):**
+- `corp_code` (int64) - 8-digit DART company code (e.g., "00126380")
+- `corp_name` (object) - Korean company name (e.g., "삼성전자")
+- `stock_code` (object) - 6-digit stock code (e.g., "005930")
+- `modify_date` (int64) - Last modification date (YYYYMMDD format)
+
+**Usually Available (99.9%):**
+- `corp_eng_name` (object) - English company name (3 missing out of 3,901)
+
+**Partially Available (70.9% - 2,766 corps):**
+- `corp_cls` (object) - **Market indicator** (Y=KOSPI, K=KOSDAQ, N=KONEX, E=Other)
+- `market_type` (object) - Redundant with corp_cls (stockMkt=Y, kosdaqMkt=K, konexMkt=N)
+- `sector` (object) - Industry sector in Korean (e.g., "통신 및 방송 장비 제조업")
+- `product` (object) - Main products/services in Korean (2,752 have this)
+
+**Rarely Available (2.7%):**
+- `trading_halt` (object) - Trading halt status (104 corps)
+- `issue` (object) - Issue flags (103 corps)
+
+#### Critical Finding: corp_cls IS the Market Indicator
+
+**Initial Mistake:** The experiment initially created a separate "market" column using `getattr(corp, 'market', None)`.
+
+**Reality:** 
+- The `market` attribute does NOT exist on Corp objects
+- `corp_cls` **IS** the market indicator
+- `market_type` provides the same information in a different format
+
+**Correction:** Used `Corp.to_dict()` method to extract all available attributes correctly.
+
+```python
+# CORRECT: Use .to_dict() to get all attributes
+corp_dict = corp.to_dict()
+
+# Available keys:
+# - Always: corp_code, corp_name, corp_eng_name, stock_code, modify_date
+# - Sometimes: sector, market_type, product, corp_cls
+# - Rarely: trading_halt, issue
+```
+
+#### Data Quality Analysis:
+
+**Complete Data (2,766 corps, 70.9%):**
+- All metadata fields populated
+- Active trading status
+- Full sector and product information
+
+**Incomplete Data (1,135 corps, 29.1%):**
+- Missing corp_cls, sector, product, market_type
+- Likely delisted or suspended companies
+- Last modified: 20170630 (most incomplete records share this date)
+- Still accessible via stock_code for historical data retrieval
+
+#### Stock Code → Corp Code Mapping:
+
+Created a CSV lookup table with 3,901 entries:
+
+```csv
+stock_code,corp_code,corp_name,corp_cls,...
+005930,00126380,삼성전자,Y,...
+000660,00118332,SK하이닉스,Y,...
+...
+```
+
+**Validation:**
+- ✅ No duplicate stock_codes
+- ✅ No duplicate corp_codes
+- ✅ Samsung Electronics verified: 005930 → 00126380
+- ✅ All major companies present
+
+#### Usage in Discovery Service:
+
+```python
+# User provides stock_code (6 digits)
+stock_code = "005930"
+
+# We map to corp_code (8 digits)
+corp_list = dart.get_corp_list()
+corp = corp_list.find_by_stock_code(stock_code)
+corp_code = corp.corp_code  # "00126380"
+
+# Use corp_code for DART API calls
+filings = corp.search_filings(...)
+```
+
+#### Files Generated:
+
+**CSV Output:**
+- `experiments/data/listed_corporations.csv` (3,901 rows × 11 columns)
+- Ready for lookup operations in services
+- UTF-8 encoding with BOM for Excel compatibility
+
+**Experiment Scripts:**
+- `exp_05_corp_list_mapping.py` - Main experiment
+- `exp_05b_corp_info_investigation.py` - Schema deep dive
+- `exp_05c_display_csv.py` - CSV inspection utility
+
+#### Lessons Learned:
+
+1. **Use .to_dict() for Complete Data**
+   - Direct attribute access (getattr) may miss fields
+   - `.to_dict()` returns all available attributes
+   - Handles optional fields gracefully
+
+2. **corp_cls Is Market, Not a Separate Field**
+   - Y = 유가증권시장 (KOSPI/Stock Market)
+   - K = 코스닥 (KOSDAQ Market)
+   - N = 코넥스 (KONEX Market)
+   - E = 기타 (Other)
+   - No need for separate "market" column
+
+3. **29% of Listed Corps Have Incomplete Metadata**
+   - Not all listed stocks are actively trading
+   - Historical data retrieval still possible
+   - Services should handle None values gracefully
+
+4. **Corp.info Property Returns Same Data as .to_dict()**
+   - Both methods provide complete schema
+   - `.to_dict()` is cleaner for batch processing
+   - `.info` is useful for interactive debugging
+
+#### Next Steps:
+
+- [x] Document findings in FINDINGS.md
+- [ ] Integrate corp_list into DiscoveryService
+- [ ] Add stock_code validation using this mapping
+- [ ] Handle missing corp_cls gracefully in queries
+- [ ] Consider caching corp_list to avoid repeated API calls
+
+---
+
 **Status**: Phase 1 POC COMPLETE - Ready for production implementation
 
