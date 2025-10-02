@@ -8,8 +8,102 @@
 2. **Continuous Live Testing**: Validate assumptions with real DART API data throughout development—don't wait until the end
 3. **Experiment-Driven**: Use `experiments/` directory for rapid prototyping and validation with actual data
 4. **Incremental Progress**: Build features in small, verifiable steps that compound into robust functionality
+5. **Never Fake POC Results** (CRITICAL): Experiments must prove concepts work with real data—no hardcoded workarounds
+6. **Fail Loudly in Experiments**: When POC experiments fail, stop and investigate—don't hide errors with fallbacks
 
-**Rationale**: Financial data pipelines require high reliability. TDD + live testing catches edge cases early, while experiments validate domain assumptions that can't be unit-tested.
+**Rationale**: Financial data pipelines require high reliability. TDD + live testing catches edge cases early, while experiments validate domain assumptions that can't be unit-tested. **POC experiments that pass with fake data or hidden errors create false confidence and waste time.**
+
+---
+
+## POC Experiment Rules (Non-Negotiable)
+
+### Rule 1: Real Data Only
+**Experiments validate APIs and workflows with live data. No mocks, no hardcoded values.**
+
+❌ **WRONG**:
+```python
+# If search fails, use known document ID
+filings = search_filings(...)
+if not filings:
+    rcept_no = "20250814003156"  # Hardcoded fallback
+```
+
+✅ **CORRECT**:
+```python
+# If search fails, investigate and fix
+filings = search_filings(...)
+if not filings:
+    raise ValueError("Search failed - need to debug search parameters")
+```
+
+### Rule 2: No Silent Failures
+**Experiments should fail loudly when assumptions are wrong.**
+
+❌ **WRONG**:
+```python
+try:
+    result = parse_xml(file)
+except Exception:
+    result = None  # Silent failure
+    print("Parsing failed, continuing...")
+```
+
+✅ **CORRECT**:
+```python
+try:
+    result = parse_xml(file)
+except Exception as e:
+    print(f"❌ Parsing failed: {e}")
+    print(f"  File: {file}")
+    print(f"  This needs investigation before proceeding")
+    raise  # Let it fail loudly
+```
+
+### Rule 3: Document Why, Not Just What
+**Experiments should explain why methods work or don't work.**
+
+❌ **WRONG**:
+```python
+# This works
+filings = search_filings(corp_code, bgn_de, end_de)
+```
+
+✅ **CORRECT**:
+```python
+# NOTE: Must use module-level search_filings() with pblntf_detail_ty
+# Corp.search_filings() doesn't filter by report type correctly
+# See: https://dart-fss.readthedocs.io/en/latest/dart_search.html
+filings = search_filings(
+    corp_code=corp_code,
+    bgn_de=bgn_de, 
+    end_de=end_de,
+    pblntf_detail_ty='A001'  # Annual reports
+)
+```
+
+### Rule 4: Verify Results Make Sense
+**Check if results pass the "smell test"—do they match reality?**
+
+❌ **WRONG**:
+```python
+filings = search_filings(...)
+print(f"Found {len(filings)} filings")  # Prints "Found 0 filings"
+# Continues anyway...
+```
+
+✅ **CORRECT**:
+```python
+filings = search_filings(...)
+print(f"Found {len(filings)} filings")
+
+# Sanity check: Samsung should have annual reports!
+if stock_code == "005930" and report_type == "annual":
+    if len(filings) == 0:
+        print("❌ SANITY CHECK FAILED:")
+        print("   Samsung Electronics should have annual reports")
+        print("   Search method is likely incorrect")
+        raise ValueError("Search returned implausible results")
+```
 
 ---
 

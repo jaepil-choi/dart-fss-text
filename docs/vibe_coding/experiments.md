@@ -28,6 +28,57 @@ Validate the **discovery and download workflow** for dart-fss-text. This Phase 1
 
 ---
 
+## Experiment Principles (CRITICAL)
+
+### 1. **Never Fake Results**
+- ❌ DON'T use hardcoded data to make experiments "pass"
+- ❌ DON'T use workarounds without understanding root cause
+- ✅ DO investigate failures thoroughly
+- ✅ DO document what actually works vs. what doesn't
+
+### 2. **Never Hide Errors**
+- ❌ DON'T catch exceptions and continue silently
+- ❌ DON'T use fallbacks without logging the failure
+- ✅ DO let experiments fail loudly when something is wrong
+- ✅ DO document unexpected behavior
+
+### 3. **Always Investigate Failures**
+- ❌ DON'T move to workarounds immediately
+- ❌ DON'T assume "close enough" is good enough
+- ✅ DO check documentation thoroughly
+- ✅ DO try multiple approaches to understand the API
+- ✅ DO document why one approach works and another doesn't
+
+### 4. **Test with Real Data**
+- ❌ DON'T use mock data in POC experiments
+- ❌ DON'T skip verification steps
+- ✅ DO use live API calls to validate assumptions
+- ✅ DO verify results make sense (e.g., Samsung should have annual reports!)
+
+**Example of WRONG approach**:
+```python
+# BAD: Empty results? Use hardcoded rcept_no!
+filings = corp.search_filings(...)
+if len(filings) == 0:
+    # Just use a known document ID
+    rcept_no = "20250814003156"  # ❌ WRONG!
+```
+
+**Example of CORRECT approach**:
+```python
+# GOOD: Empty results? Investigate why!
+filings = corp.search_filings(...)
+if len(filings) == 0:
+    # Stop and investigate
+    print("❌ No filings found - investigating...")
+    print("1. Checking if pblntf_detail_ty parameter is needed")
+    print("2. Checking if we're using the right search function")
+    print("3. Checking dart-fss documentation")
+    raise ValueError("Search returned no results - need to fix search method")
+```
+
+---
+
 ## Prerequisites
 
 ### Environment Setup
