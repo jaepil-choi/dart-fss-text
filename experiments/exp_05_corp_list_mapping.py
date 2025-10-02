@@ -17,7 +17,7 @@ CRITICAL FINDINGS:
 1. Total: 114,106 corporations (3,901 listed, 110,205 unlisted)
 2. Complete schema: 11 columns via .to_dict()
 3. corp_cls IS the market indicator (Y=KOSPI, K=KOSDAQ, N=KONEX)
-4. NO separate "market" attribute exists - that was a mistake
+4. market_type is redundant with corp_cls but provided by DART API (kept as-is)
 5. 70.9% have complete data, 29.1% missing corp_cls/sector/product
 6. Missing data likely indicates delisted/suspended companies
 
@@ -63,12 +63,12 @@ print(f"Available attributes (dir): {[attr for attr in dir(sample_corp) if not a
 
 # Try to access common attributes
 print(f"\nSample corp details:")
-print(f"  - corp_code: {getattr(sample_corp, 'corp_code', 'N/A')}")
-print(f"  - corp_name: {getattr(sample_corp, 'corp_name', 'N/A')}")
-print(f"  - stock_code: {getattr(sample_corp, 'stock_code', 'N/A')}")
-print(f"  - corp_cls: {getattr(sample_corp, 'corp_cls', 'N/A')}")
-print(f"  - sector: {getattr(sample_corp, 'sector', 'N/A')}")
-print(f"  - product: {getattr(sample_corp, 'product', 'N/A')}")
+print(f"  - corp_code: {getattr(sample_corp, 'corp_code', None)}")
+print(f"  - corp_name: {getattr(sample_corp, 'corp_name', None)}")
+print(f"  - stock_code: {getattr(sample_corp, 'stock_code', None)}")
+print(f"  - corp_cls: {getattr(sample_corp, 'corp_cls', None)}")
+print(f"  - sector: {getattr(sample_corp, 'sector', None)}")
+print(f"  - product: {getattr(sample_corp, 'product', None)}")
 
 # Step 4: Filter to only listed stocks (stock_code is not None)
 print("\n[Step 4] Filtering to listed stocks only...")
@@ -107,6 +107,7 @@ print(f"  E = 기타 (Other)")
 if 'market_type' in df.columns:
     print(f"\nValue counts by market_type:")
     print(df['market_type'].value_counts())
+    print(f"\nNote: market_type is provided by DART API (redundant with corp_cls but kept as original data)")
 
 # Step 7: Validation checks
 print("\n[Step 7] Running validation checks...")
