@@ -586,118 +586,225 @@ def parse_document(path: Path) -> Document:
 
 ## Parameter Validation & Discovery
 
-### Specification-Based Parameters
+### Specification-Based Validation with Pydantic Settings
 
-All parameters defined in `config/types.yaml` must follow strict validation and discovery rules.
+All parameters defined in `config/types.yaml` are validated using **Pydantic Settings** for automatic, type-safe configuration management.
 
-#### Rule: Validate Against Specification
+### Architecture Overview
 
-Any function accepting spec parameters (`pblntf_detail_ty`, `corp_cls`, `rm`) MUST:
-1. Load valid values from `config/types.yaml`
-2. Validate inputs before processing  
-3. Raise descriptive errors with guidance
+**4-Layer Design**:
+1. **Config Layer**: Pydantic Settings auto-loads YAML
+2. **Validator Layer**: Reusable field validators
+3. **Model Layer**: Request/response models with validators
+4. **Discovery Layer**: Helper classes for exploring options
 
-**Implementation Example**:
+---
+
+### Layer 1: Config Management (Pydantic Settings)
+
 ```python
-# src/dart_fss_text/models/validators.py
-import yaml
-from pathlib import Path
+# src/dart_fss_text/config.py
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Dict
 
-class ReportTypeValidator:
-    """Validator for report type parameters."""
+class ReportTypesConfig(BaseSettings):
+    """
+    Configuration automatically loaded from config/types.yaml.
+    Pydantic Settings handles file resolution and parsing.
+    """
     
-    _spec = None
+    pblntf_detail_ty: Dict[str, str] = Field(
+        description="Valid report type codes with Korean descriptions"
+    )
+    corp_cls: Dict[str, str] = Field(
+        description="Corporation classification codes (KOSPI, KOSDAQ, etc.)"
+    )
+    rm: Dict[str, str] = Field(
+        description="Remark codes for filing metadata"
+    )
     
-    @classmethod
-    def _load_spec(cls) -> Dict:
-        if cls._spec is None:
-            config_path = Path(__file__).parent.parent.parent / "config" / "types.yaml"
-            with open(config_path, 'r', encoding='utf-8') as f:
-                cls._spec = yaml.safe_load(f)
-        return cls._spec
+    model_config = SettingsConfigDict(
+        yaml_file='config/types.yaml',
+        yaml_file_encoding='utf-8',
+        extra='ignore'
+    )
     
-    @classmethod
-    def validate_report_type(cls, code: str) -> None:
-        spec = cls._load_spec()
-        valid_codes = spec['pblntf_detail_ty'].keys()
-        
-        if code not in valid_codes:
-            raise ValueError(
-                f"Invalid report type: '{code}'\n"
-                f"Use ReportTypes.list_available() to see all valid codes."
-            )
+    def is_valid_report_type(self, code: str) -> bool:
+        """Check if report type code is valid."""
+        return code in self.pblntf_detail_ty
+    
+    def get_report_description(self, code: str) -> str:
+        """Get description for report type."""
+        if code not in self.pblntf_detail_ty:
+            raise KeyError(f"Unknown report type: {code}")
+        return self.pblntf_detail_ty[code]
+
+
+# Singleton pattern - loaded once, cached forever
+_config: ReportTypesConfig = None
+
+def get_config() -> ReportTypesConfig:
+    """Get global config instance (lazy-loaded)."""
+    global _config
+    if _config is None:
+        _config = ReportTypesConfig()
+    return _config
 ```
 
-#### Rule: Provide Discovery Methods
+**Benefits**:
+- ✅ No manual path traversal (`.parent.parent`)
+- ✅ Automatic YAML parsing and validation
+- ✅ Type-safe config access
+- ✅ Lazy loading with singleton pattern
 
-Provide helper classes for exploring available parameters:
+---
+
+### Layer 2: Reusable Validators
+
+```python
+# src/dart_fss_text/validators.py
+from typing import List
+from pydantic import ValidationError
+
+def validate_report_types(codes: List[str]) -> List[str]:
+    """
+    Reusable validator for report type codes.
+    Use with @field_validator in Pydantic models.
+    
+    Raises:
+        ValueError: If any code is invalid
+    """
+    config = get_config()
+    invalid = [c for c in codes if not config.is_valid_report_type(c)]
+    
+    if invalid:
+        valid_sample = list(config.pblntf_detail_ty.keys())[:10]
+        raise ValueError(
+            f"Invalid report type codes: {invalid}\n"
+            f"Valid codes include: {valid_sample}...\n"
+            f"Use ReportTypes.list_available() to see all options."
+        )
+    
+    return codes
+
+
+def validate_stock_code(code: str) -> str:
+    """Validate Korean stock code format (6 digits)."""
+    if not code.isdigit() or len(code) != 6:
+        raise ValueError(
+            f"Stock code must be 6 digits, got: '{code}'\n"
+            f"Example: '005930' (Samsung Electronics)"
+        )
+    return code
+
+
+def validate_date_yyyymmdd(date: str) -> str:
+    """Validate YYYYMMDD date format."""
+    if not date.isdigit() or len(date) != 8:
+        raise ValueError(
+            f"Date must be YYYYMMDD format, got: '{date}'\n"
+            f"Example: '20240101'"
+        )
+    # Optional: Add date range validation
+    year = int(date[:4])
+    if year < 1980 or year > 2100:
+        raise ValueError(f"Year {year} is out of valid range (1980-2100)")
+    return date
+```
+
+---
+
+### Layer 3: Pydantic Models with Validation
+
+```python
+# src/dart_fss_text/models/requests.py
+from pydantic import BaseModel, field_validator
+from typing import List
+
+class SearchFilingsRequest(BaseModel):
+    """
+    Request model for filing search.
+    All fields are automatically validated.
+    """
+    stock_code: str
+    start_date: str
+    end_date: str
+    report_types: List[str]
+    
+    # Apply validators using field_validator decorator
+    _validate_stock_code = field_validator('stock_code')(validate_stock_code)
+    _validate_start_date = field_validator('start_date')(validate_date_yyyymmdd)
+    _validate_end_date = field_validator('end_date')(validate_date_yyyymmdd)
+    _validate_report_types = field_validator('report_types')(validate_report_types)
+    
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "stock_code": "005930",
+                "start_date": "20240101",
+                "end_date": "20241231",
+                "report_types": ["A001", "A002"]
+            }]
+        }
+    }
+```
+
+**Usage in Functions**:
+```python
+def search_filings(stock_code: str, start_date: str, end_date: str, report_types: List[str]):
+    # Validation happens automatically via Pydantic
+    request = SearchFilingsRequest(
+        stock_code=stock_code,
+        start_date=start_date,
+        end_date=end_date,
+        report_types=report_types
+    )
+    
+    # Now guaranteed all inputs are valid!
+    # Proceed with dart-fss API calls...
+```
+
+---
+
+### Layer 4: Discovery Helpers
 
 ```python
 # src/dart_fss_text/types.py
+from typing import Dict
+
 class ReportTypes:
-    """Helper for discovering DART report types."""
+    """Helper class for discovering available report types."""
     
     @staticmethod
     def list_available() -> Dict[str, str]:
-        """List all report types with descriptions."""
-        # Load from config/types.yaml
-        return {'A001': '사업보고서', ...}
+        """List all valid report type codes."""
+        return get_config().pblntf_detail_ty.copy()
     
     @staticmethod
-    def list_by_category(category: str) -> Dict[str, str]:
-        """List report types by category (A, B, C, etc.)."""
-        all_types = ReportTypes.list_available()
-        return {k: v for k, v in all_types.items() if k.startswith(category)}
+    def list_by_category(prefix: str) -> Dict[str, str]:
+        """List report types by category (A, B, etc.)."""
+        all_types = get_config().pblntf_detail_ty
+        return {k: v for k, v in all_types.items() if k.startswith(prefix)}
     
     @staticmethod
     def get_description(code: str) -> str:
         """Get description for a report type code."""
-        types = ReportTypes.list_available()
-        if code not in types:
-            raise KeyError(f"Report type '{code}' not found")
-        return types[code]
+        return get_config().get_report_description(code)
 ```
 
-#### Usage in API Functions
-
+**CLI Integration**:
 ```python
-def search_filings(stock_code: str, report_types: List[str]) -> List[Filing]:
-    """
-    Search for filings.
-    
-    Args:
-        report_types: Report type codes (e.g., ['A001', 'A002'])
-    
-    Raises:
-        ValueError: If any report_type is invalid
-    """
-    # Validate all report types
-    for report_type in report_types:
-        ReportTypeValidator.validate_report_type(report_type)
-    
-    # Proceed with search...
-```
-
-#### CLI Commands for Discovery
-
-```python
-# src/dart_fss_text/cli.py
 @click.command()
-def list_report_types():
-    """List all available DART report types."""
+def list_types():
+    """List all available report types."""
     types = ReportTypes.list_available()
     for code, desc in sorted(types.items()):
         click.echo(f"{code}: {desc}")
 ```
 
-**Benefits**:
-- Fail fast with clear error messages
-- Self-documenting API
-- Single source of truth in types.yaml
-- Users don't need to memorize 60+ codes
 
----
+
 
 ## Git Workflow
 
