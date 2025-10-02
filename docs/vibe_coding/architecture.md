@@ -467,29 +467,32 @@ This ensures backtesting integrity—no future information leaks into historical
 ```
 data/
   raw/
-    {stock_code}/
-      {report_type}/
-        {rcept_no}_{published_date}.xml
+    {year}/               # Year from rcept_dt (publication date)
+      {corp_code}/        # Corporation code (not stock code)
+        {rcept_no}.xml
         
 Example:
 data/
   raw/
-    005930/
-      A001/
-        20240101000001_20240315.xml
-        20230101000001_20230314.xml
-      A002/
-        20230601000001_20230815.xml
+    2023/
+      00126380/           # Samsung (corp_code)
+        20230307000542.xml  # 2022 FY Annual Report (published 2023-03-07)
+        20230814003284.xml  # 2023 H1 Semi-Annual (published 2023-08-14)
+    2024/
+      00126380/
+        20240312000736.xml  # 2023 FY Annual Report (published 2024-03-12)
 ```
 
-**Naming Convention**:
-- `{rcept_no}`: DART receipt number (ensures uniqueness)
-- `{published_date}`: Original disclosure date in YYYYMMDD format (for sorting)
+**Directory Convention**:
+- `{year}`: Extracted from `rcept_dt` (receipt/publication date, YYYY)
+- `{corp_code}`: DART corporation code (6-8 digits, more stable than stock code)
+- `{rcept_no}`: DART receipt number (unique document ID)
 
-**Rationale**:
-1. Hierarchical structure enables efficient directory-based filtering
-2. Filename contains PIT-critical date for quick identification
-3. Stock code and report type in path avoid collisions
+**Rationale (PIT-Aware)**:
+1. **Year from rcept_dt**: Ensures Point-in-Time correctness. A FY 2022 report published in March 2023 goes in `2023/` because that's when it became publicly available for trading decisions.
+2. **Corp code vs stock code**: Corp codes don't change; stock codes can change or be delisted.
+3. **Flat within corp**: All document types for one company in same folder for simpler queries.
+4. **Hierarchical by year**: Easy to partition data, delete old data, or query by availability date.
 
 ---
 

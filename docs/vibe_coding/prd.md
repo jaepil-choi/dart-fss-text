@@ -167,16 +167,17 @@ for section in sections:
 4. **Document Download & Storage**
    - Use `dart_fss.api.filings.download_document()` for retrieval
    - Automatic unzipping and XML extraction
-   - Store raw XML in local filesystem with organized directory structure:
+   - Store raw XML in local filesystem with PIT-aware directory structure:
 
      ```
      data/
        raw/
-         {stock_code}/
-           {report_type}/
-             {rcept_no}_{published_date}.xml
+         {year}/              # Year from rcept_dt (receipt/publication date)
+           {corp_code}/       # Company code (not stock code, for uniqueness)
+             {rcept_no}.xml
      ```
 
+   - **Rationale**: Using `rcept_dt` year ensures PIT correctness. A 2022 FY report published in March 2023 (rcept_dt=20230307) should be in `2023/` folder, as that's when it became publicly available.
    - Track download status in metadata database
 
 ### Phase 2: XML Parsing & Structuring
