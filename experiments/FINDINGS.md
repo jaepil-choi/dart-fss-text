@@ -192,7 +192,7 @@ for report_type in report_types:
 - [x] Document POC principles in experiments.md
 - [x] Document POC rules in implementation.md
 - [x] Create exp_02c to test correct search methods
-- [ ] Update exp_02 and exp_03 to use correct search method
+- [x] Create exp_04 corrected end-to-end pipeline
 - [ ] Write formal tests based on corrected search method
 - [ ] Implement discovery module with proper search API
 
@@ -204,8 +204,125 @@ for report_type in report_types:
 ✅ **Root cause identified**: Missing `pblntf_detail_ty` parameter
 ✅ **Verified with real data**: Samsung has annual reports for 2022, 2023, 2024
 ✅ **Documented lessons learned** for future reference
+✅ **Complete pipeline validated** with all periodic report types (A001, A002, A003)
 
 ---
 
-**Status**: Issue resolved, ready to proceed with corrected implementation
+## Phase 1 Complete: End-to-End Pipeline Validated
+
+**Date**: 2025-10-03
+
+### Experiment 4: Corrected Pipeline Success
+
+Successfully validated complete **discover → download → organize** workflow using correct search API.
+
+#### Results Summary:
+```
+Total: 6/6 filings (100% success rate)
+- A001 (Annual):      2/2 ✓
+- A002 (Semi-Annual): 2/2 ✓  
+- A003 (Quarterly):   2/2 ✓
+
+Performance:
+- Download: ~0.25s per document
+- Validation: Instant with lxml recover mode
+```
+
+#### Directory Structure:
+```
+experiments/data/raw/
+└── 005930/
+    ├── A001/ (Annual Reports)
+    │   ├── 20250311001085/
+    │   └── 20240312000736/
+    ├── A002/ (Semi-Annual Reports)
+    │   ├── 20250814003156/
+    │   └── 20240814003284/
+    └── A003/ (Quarterly Reports)
+        ├── 20250515001922/
+        └── 20241114002642/
+```
+
+Each filing directory contains:
+- `{rcept_no}.zip` - Original downloaded ZIP
+- `{rcept_no}.xml` - Main XML document
+- `metadata.json` - PIT-critical metadata
+
+---
+
+## Critical Finding: Multiple Files in ZIP Archive
+
+**Date**: 2025-10-03
+
+### Issue: ZIP Contains Multiple XML Files
+
+When extracting a DART ZIP file, it may contain **multiple XML files**, not just one.
+
+#### Example (20250311001085.zip):
+```
+20250311001085/
+├── 20250311001085.xml        ← MAIN FILE (6.3 MB)
+├── 20250311001085_00760.xml  ← Supplementary file (596 KB)
+└── 20250311001085_00761.xml  ← Supplementary file (702 KB)
+```
+
+### The Rule: Always Use the Main File
+
+**Main XML file**: `{rcept_no}.xml` (exact match with receipt number)
+
+**Supplementary files**: `{rcept_no}_XXXXX.xml` (with suffix) - these are:
+- Attachments
+- Supplementary disclosures
+- Supporting documents
+- NOT the primary financial statement
+
+### Implementation Impact
+
+**✅ CORRECT** approach for XML parsing:
+
+```python
+# Always target the main file explicitly
+rcept_no = "20250311001085"
+main_xml = filing_dir / f"{rcept_no}.xml"
+
+if not main_xml.exists():
+    raise FileNotFoundError(f"Main XML not found: {main_xml}")
+
+# Parse only the main file
+tree = etree.parse(str(main_xml), parser)
+```
+
+**❌ WRONG** approach:
+
+```python
+# Don't just take the first XML or glob all XMLs
+xml_files = list(filing_dir.glob("*.xml"))
+tree = etree.parse(str(xml_files[0]))  # Might parse wrong file!
+```
+
+### Why This Matters
+
+1. **Parsing Priority**: We only need to parse the main document for textual sections
+2. **Performance**: Supplementary files add no value for our use case but would waste parsing time
+3. **Data Integrity**: Mixing main + supplementary content would corrupt the document structure
+4. **Storage**: No need to store supplementary files in MongoDB
+
+### Validation in Exp 4
+
+All 6 downloaded filings were validated to ensure:
+- ✅ Main XML file exists with pattern `{rcept_no}.xml`
+- ✅ Main XML is parseable with lxml recover mode
+- ✅ Main XML contains expected elements (USERMARK, TABLE tags)
+
+### Next Steps for Implementation
+
+When implementing the parser module:
+1. Always target `{rcept_no}.xml` specifically
+2. Add validation that main file exists before parsing
+3. Ignore any `{rcept_no}_*.xml` supplementary files
+4. Document this naming convention in parser documentation
+
+---
+
+**Status**: Phase 1 POC COMPLETE - Ready for production implementation
 
