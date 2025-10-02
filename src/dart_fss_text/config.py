@@ -1,0 +1,166 @@
+"""
+Configuration management using Pydantic Settings.
+
+Automatically loads configuration from config/types.yaml and provides
+type-safe access to DART API specifications (report types, corp classes, etc.).
+"""
+
+from pathlib import Path
+from typing import Dict, Optional
+import yaml
+from pydantic import Field, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class ReportTypesConfig(BaseSettings):
+    """
+    Configuration automatically loaded from config/types.yaml.
+    
+    Pydantic Settings handles file resolution and parsing automatically.
+    This class provides type-safe access to DART API specifications including:
+    - Report type codes (pblntf_detail_ty)
+    - Corporation classifications (corp_cls)
+    - Remark codes (rm)
+    
+    Attributes:
+        pblntf_detail_ty: Dictionary of report type codes to Korean descriptions
+        corp_cls: Dictionary of corporation classification codes
+        rm: Dictionary of remark codes
+    
+    Example:
+        >>> config = ReportTypesConfig()
+        >>> config.is_valid_report_type('A001')
+        True
+        >>> config.get_report_description('A001')
+        '사업보고서'
+    """
+    
+    pblntf_detail_ty: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Valid report type codes with Korean descriptions"
+    )
+    corp_cls: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Corporation classification codes (KOSPI, KOSDAQ, etc.)"
+    )
+    rm: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Remark codes for filing metadata"
+    )
+    
+    model_config = SettingsConfigDict(
+        extra='ignore'
+    )
+    
+    @model_validator(mode='before')
+    @classmethod
+    def load_yaml_config(cls, data: dict) -> dict:
+        """
+        Load configuration from config/types.yaml if not already provided.
+        
+        This validator runs before field validation and loads the YAML file
+        if the data dict is empty (i.e., no values were provided).
+        """
+        # If data already has values (e.g., from tests), don't override
+        if data:
+            return data
+        
+        # Find the config file relative to project root
+        # Search upward from this file's location
+        current_file = Path(__file__)
+        project_root = current_file.parent.parent.parent  # src/dart_fss_text/config.py -> root
+        config_path = project_root / 'config' / 'types.yaml'
+        
+        if not config_path.exists():
+            # Try alternative: relative to current working directory
+            config_path = Path('config/types.yaml')
+        
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"Config file not found at {config_path}. "
+                f"Ensure config/types.yaml exists in project root."
+            )
+        
+        # Load YAML
+        with open(config_path, 'r', encoding='utf-8') as f:
+            yaml_data = yaml.safe_load(f)
+        
+        # Extract only the fields we need (ignore pblntf_ty which is not needed)
+        return {
+            'pblntf_detail_ty': yaml_data.get('pblntf_detail_ty', {}),
+            'corp_cls': yaml_data.get('corp_cls', {}),
+            'rm': yaml_data.get('rm', {})
+        }
+    
+    def is_valid_report_type(self, code: Optional[str]) -> bool:
+        """
+        Check if a report type code is valid.
+        
+        Args:
+            code: Report type code to validate (e.g., 'A001')
+        
+        Returns:
+            True if code is valid, False otherwise
+        
+        Example:
+            >>> config = ReportTypesConfig()
+            >>> config.is_valid_report_type('A001')
+            True
+            >>> config.is_valid_report_type('INVALID')
+            False
+        """
+        if code is None:
+            return False
+        return code in self.pblntf_detail_ty
+    
+    def get_report_description(self, code: str) -> str:
+        """
+        Get Korean description for a report type code.
+        
+        Args:
+            code: Report type code (e.g., 'A001')
+        
+        Returns:
+            Korean description string
+        
+        Raises:
+            KeyError: If code is not found in configuration
+        
+        Example:
+            >>> config = ReportTypesConfig()
+            >>> config.get_report_description('A001')
+            '사업보고서'
+        """
+        if code not in self.pblntf_detail_ty:
+            raise KeyError(f"Unknown report type: {code}")
+        return self.pblntf_detail_ty[code]
+
+
+# Singleton pattern - loaded once, cached forever
+_config: Optional[ReportTypesConfig] = None
+
+
+def get_config() -> ReportTypesConfig:
+    """
+    Get global config instance (lazy-loaded singleton).
+    
+    The configuration is loaded once on first access and cached for
+    subsequent calls. This ensures efficient memory usage and prevents
+    redundant YAML parsing.
+    
+    Returns:
+        Singleton ReportTypesConfig instance
+    
+    Example:
+        >>> config = get_config()
+        >>> config.is_valid_report_type('A001')
+        True
+        >>> config2 = get_config()
+        >>> config is config2  # Same instance
+        True
+    """
+    global _config
+    if _config is None:
+        _config = ReportTypesConfig()
+    return _config
+
