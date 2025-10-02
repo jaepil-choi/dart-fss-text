@@ -702,9 +702,91 @@ The Phase 1 experiments are successful if we can:
 
 ---
 
+---
+
+## Phase 2: Corporation List Mapping
+
+### Experiment 5: Listed Corporations and Stock Code Mapping
+
+**Date**: 2025-10-03  
+**Status**: ✅ **COMPLETE**
+
+#### Objective
+Build the essential **stock_code → corp_code mapping** required for discovery service by retrieving all listed corporations from DART.
+
+#### Results Summary
+- **Total corporations**: 114,106 (3.4% listed, 96.6% unlisted)
+- **Listed stocks**: 3,901 corporations
+- **CSV generated**: `listed_corporations.csv` (11 columns)
+- **Success rate**: 100%
+
+#### Key Findings
+
+**Market Distribution:**
+```
+KOSDAQ (K): 1,802 companies (65.2%)
+KOSPI (Y):    848 companies (30.7%)
+KONEX (N):    116 companies (4.2%)
+Missing:    1,135 companies (29.1% - likely delisted)
+```
+
+**Schema (11 columns):**
+- **Always present (100%)**: corp_code, corp_name, corp_eng_name, stock_code, modify_date
+- **Usually present (99.9%)**: corp_eng_name (3 missing)
+- **Sometimes present (70.9%)**: corp_cls, market_type, sector, product
+- **Rarely present (2.7%)**: trading_halt, issue
+
+**Critical Discovery:**
+- `corp_cls` IS the market indicator (Y=KOSPI, K=KOSDAQ, N=KONEX)
+- `market_type` is redundant with corp_cls but provided by DART API (kept as-is)
+- 29.1% of listed stocks have incomplete metadata (likely delisted/suspended)
+- All incomplete records share modify_date=20170630
+
+#### Scripts Created
+1. **exp_05_corp_list_mapping.py**: Main experiment - retrieves and maps all listed corps
+2. **exp_05b_corp_info_investigation.py**: Deep dive into Corp object schema
+3. **exp_05c_display_csv.py**: CSV inspection utility
+
+#### Usage for Discovery Service
+```python
+# User provides stock_code (6 digits)
+stock_code = "005930"
+
+# Load corp list and map to corp_code (8 digits)
+corp_list = dart.get_corp_list()
+corp = corp_list.find_by_stock_code(stock_code)
+corp_code = corp.corp_code  # "00126380"
+
+# Use corp_code for DART API calls
+filings = corp.search_filings(...)
+```
+
+#### Validation
+- ✅ No duplicate stock_codes
+- ✅ No duplicate corp_codes  
+- ✅ Samsung Electronics verified: 005930 → 00126380
+- ✅ Proper NaN values (no "N/A" strings)
+- ✅ All 11 columns from DART API preserved
+
+#### Files Generated
+- `experiments/data/listed_corporations.csv` (3,901 rows × 11 columns)
+- Ready for integration into DiscoveryService
+
+#### Next Steps
+- [ ] Integrate corp_list into DiscoveryService
+- [ ] Add caching mechanism (avoid repeated API calls)
+- [ ] Handle missing corp_cls gracefully in queries
+- [ ] Consider persisting to database for faster startup
+
+---
+
 ## Status
 
-**Current Status**: 📝 **Awaiting User Approval**
+**Current Status**: ✅ **Phase 1 & Phase 2 POC Complete**
 
-Once approved, we'll execute this experiment in `sandbox.ipynb` and document all findings for the next phase of development.
+**Completed:**
+- Phase 1: Discovery & Download Pipeline
+- Phase 2: Corporation List Mapping
+
+**Next:** Production implementation of Discovery and Download services using TDD.
 
