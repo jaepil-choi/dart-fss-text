@@ -584,6 +584,121 @@ def parse_document(path: Path) -> Document:
 
 ---
 
+## Parameter Validation & Discovery
+
+### Specification-Based Parameters
+
+All parameters defined in `config/types.yaml` must follow strict validation and discovery rules.
+
+#### Rule: Validate Against Specification
+
+Any function accepting spec parameters (`pblntf_detail_ty`, `corp_cls`, `rm`) MUST:
+1. Load valid values from `config/types.yaml`
+2. Validate inputs before processing  
+3. Raise descriptive errors with guidance
+
+**Implementation Example**:
+```python
+# src/dart_fss_text/models/validators.py
+import yaml
+from pathlib import Path
+from typing import Dict
+
+class ReportTypeValidator:
+    """Validator for report type parameters."""
+    
+    _spec = None
+    
+    @classmethod
+    def _load_spec(cls) -> Dict:
+        if cls._spec is None:
+            config_path = Path(__file__).parent.parent.parent / "config" / "types.yaml"
+            with open(config_path, 'r', encoding='utf-8') as f:
+                cls._spec = yaml.safe_load(f)
+        return cls._spec
+    
+    @classmethod
+    def validate_report_type(cls, code: str) -> None:
+        spec = cls._load_spec()
+        valid_codes = spec['pblntf_detail_ty'].keys()
+        
+        if code not in valid_codes:
+            raise ValueError(
+                f"Invalid report type: '{code}'\n"
+                f"Use ReportTypes.list_available() to see all valid codes."
+            )
+```
+
+#### Rule: Provide Discovery Methods
+
+Provide helper classes for exploring available parameters:
+
+```python
+# src/dart_fss_text/types.py
+class ReportTypes:
+    """Helper for discovering DART report types."""
+    
+    @staticmethod
+    def list_available() -> Dict[str, str]:
+        """List all report types with descriptions."""
+        # Load from config/types.yaml
+        return {'A001': '사업보고서', ...}
+    
+    @staticmethod
+    def list_by_category(category: str) -> Dict[str, str]:
+        """List report types by category (A, B, C, etc.)."""
+        all_types = ReportTypes.list_available()
+        return {k: v for k, v in all_types.items() if k.startswith(category)}
+    
+    @staticmethod
+    def get_description(code: str) -> str:
+        """Get description for a report type code."""
+        types = ReportTypes.list_available()
+        if code not in types:
+            raise KeyError(f"Report type '{code}' not found")
+        return types[code]
+```
+
+#### Usage in API Functions
+
+```python
+def search_filings(stock_code: str, report_types: List[str]) -> List[Filing]:
+    """
+    Search for filings.
+    
+    Args:
+        report_types: Report type codes (e.g., ['A001', 'A002'])
+    
+    Raises:
+        ValueError: If any report_type is invalid
+    """
+    # Validate all report types
+    for report_type in report_types:
+        ReportTypeValidator.validate_report_type(report_type)
+    
+    # Proceed with search...
+```
+
+#### CLI Commands for Discovery
+
+```python
+# src/dart_fss_text/cli.py
+@click.command()
+def list_report_types():
+    """List all available DART report types."""
+    types = ReportTypes.list_available()
+    for code, desc in sorted(types.items()):
+        click.echo(f"{code}: {desc}")
+```
+
+**Benefits**:
+- Fail fast with clear error messages
+- Self-documenting API
+- Single source of truth in types.yaml
+- Users don't need to memorize 60+ codes
+
+---
+
 ## Git Workflow
 
 ### Branch Strategy
