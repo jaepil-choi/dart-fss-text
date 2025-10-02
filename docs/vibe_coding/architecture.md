@@ -79,9 +79,9 @@
 #### 4. **Integration Layer**
    - **Purpose**: External system integration
    - **Components**:
-     - `DartFssAdapter`: Wrapper for dart-fss API calls
      - `MongoDBClient`: MongoDB connection management
-   - **Responsibilities**: Third-party API abstraction, connection pooling
+   - **Responsibilities**: Connection pooling, database abstraction
+   - **Note**: Services use `dart-fss` directly - no adapter needed as it's already a well-designed API wrapper
 
 ---
 
@@ -552,8 +552,7 @@ src/
     
     integrations/
       __init__.py
-      dart_fss_adapter.py          # DartFssAdapter
-      mongodb_client.py            # MongoDBClient
+      mongodb_client.py            # MongoDBClient (database connection only)
     
     models/
       __init__.py
@@ -594,27 +593,7 @@ class StorageManager(ABC):
 
 **Benefits**: Enables testing with in-memory storage; allows future database migration.
 
-### 2. **Adapter Pattern** (External Integrations)
-Wrap dart-fss API calls:
-
-```python
-class DartFssAdapter:
-    """Adapter for dart-fss API calls."""
-    
-    def download_document(self, rcept_no: str, save_path: Path) -> Path:
-        """Download and unzip document. Returns path to XML."""
-        # Wraps dart_fss.api.filings.download_document()
-        pass
-    
-    def search_filings(self, stock_code: str, start_date: str, end_date: str) -> List[Dict]:
-        """Search filings with filters."""
-        # Wraps dart_fss.api.filings.search()
-        pass
-```
-
-**Benefits**: Insulates codebase from dart-fss API changes; enables mocking in tests.
-
-### 3. **Strategy Pattern** (Parsing Strategies)
+### 2. **Strategy Pattern** (Parsing Strategies)
 Different parsing strategies for different document types:
 
 ```python
@@ -634,6 +613,38 @@ class QuarterlyReportParser(ParsingStrategy):
 ```
 
 **Benefits**: Extensible to new document types without modifying core logic.
+
+### 3. **Direct dart-fss Usage**
+Services use dart-fss directly rather than through an adapter:
+
+```python
+from dart_fss.api import filings
+import dart_fss
+
+class DownloadService:
+    """Download service using dart-fss directly."""
+    
+    def download_filing(self, filing: dart_fss.Filing, base_path: Path) -> Path:
+        """Download and organize by PIT-aware directory structure."""
+        # Extract year from rcept_dt for PIT correctness
+        year = filing.rcept_dt[:4]
+        save_dir = base_path / year / filing.corp_code
+        
+        # Call dart-fss directly
+        filings.download_document(
+            path=str(save_dir) + "/",
+            rcept_no=filing.rcept_no
+        )
+        return save_dir / f"{filing.rcept_no}.xml"
+```
+
+**Benefits**: 
+- Simpler architecture (no wrapper around a wrapper)
+- dart-fss is already well-designed and stable
+- Users can mix dart-fss and our library naturally
+- Easy to mock dart-fss in tests using standard pytest patterns
+
+**Rationale**: dart-fss IS the adapter layer for DART API. Adding another layer would be over-engineering.
 
 ### 4. **Facade Pattern** (API Layer)
 Simplified interface for complex subsystems:
