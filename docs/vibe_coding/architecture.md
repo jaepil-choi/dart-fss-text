@@ -133,6 +133,61 @@ Model financial statement concepts explicitly:
 
 **Rationale**: Code should reflect the financial reporting domain, not just technical structures.
 
+### 7. **Specification-Based Validation**
+All parameters defined in `config/types.yaml` must be validated against the specification:
+- **Strict Validation**: Reject invalid parameter values immediately
+- **Discoverability**: Provide helper methods to list available values
+- **Single Source of Truth**: `types.yaml` is the canonical reference
+
+**Implementation Requirements**:
+
+1. **Input Validation**: Any function accepting `pblntf_detail_ty`, `corp_cls`, or other spec parameters MUST validate against `types.yaml`:
+   ```python
+   def search_filings(stock_code: str, report_type: str):
+       """Search filings by report type."""
+       if not ReportTypes.is_valid(report_type):
+           raise ValueError(
+               f"Invalid report_type: {report_type}. "
+               f"Use ReportTypes.list_available() to see valid values."
+           )
+   ```
+
+2. **Discovery Methods**: Every validated parameter MUST have a corresponding discovery method:
+   ```python
+   class ReportTypes:
+       @staticmethod
+       def list_available() -> Dict[str, str]:
+           """Return all valid report types with descriptions."""
+           return {...}  # Loaded from config/types.yaml
+       
+       @staticmethod
+       def list_periodic_reports() -> List[str]:
+           """Return periodic report types (A001, A002, A003)."""
+           return ["A001", "A002", "A003"]
+       
+       @staticmethod
+       def get_description(code: str) -> str:
+           """Get human-readable description for report type code."""
+           return "사업보고서"  # For A001
+   ```
+
+3. **User-Facing Documentation**: CLI and API should expose discovery commands:
+   ```bash
+   # CLI example
+   dart-fss-text types list
+   dart-fss-text types describe A001
+   
+   # Python API example
+   from dart_fss_text import ReportTypes
+   print(ReportTypes.list_available())
+   ```
+
+**Rationale**: 
+- **Prevents silent failures**: Invalid parameters fail fast with clear error messages
+- **Improves discoverability**: Users can explore available options programmatically
+- **Maintains consistency**: Single YAML source prevents code/spec drift
+- **Better UX**: Users don't need to memorize 60+ report codes
+
 ---
 
 ## Data Models
