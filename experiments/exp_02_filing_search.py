@@ -1,170 +1,143 @@
 """
-Experiment 2: Filing Search & Metadata Extraction
+OBSOLETE EXPERIMENT - LESSONS LEARNED
+======================================
 
-Goal: Validate the discovery pipeline
-- Search filings by stock code and date range
-- Extract PIT-critical metadata
-- Filter by report type
-"""
+Original Goal: Filing Search & Metadata Extraction
+Date Created: 2025-10-02
+Status: ❌ INCORRECT - Replaced by exp_02c_correct_search_api.py
 
-import os
-import json
-from pathlib import Path
-from dotenv import load_dotenv
-import dart_fss as dart
+WHAT THIS EXPERIMENT TRIED TO ACHIEVE:
+---------------------------------------
+1. Search for Samsung Electronics filings by stock code and date range
+2. Extract PIT-critical metadata (rcept_no, report_nm, rcept_dt)
+3. Filter by report type (annual, semi-annual)
+4. Validate the discovery pipeline workflow
 
-print("=" * 80)
-print("EXPERIMENT 2: FILING SEARCH & METADATA EXTRACTION")
-print("=" * 80)
+WHAT WAS WRONG:
+---------------
+The search call was missing a critical parameter:
 
-# Setup
-print("\n[Setup] Loading environment configuration...")
-load_dotenv()
-api_key = os.getenv("OPENDART_API_KEY")
-
-if not api_key:
-    raise ValueError("OPENDART_API_KEY not found in .env file")
-
-dart.set_api_key(api_key=api_key)
-print(f"✓ API Key configured: {api_key[:10]}***")
-
-# Step 2.1: Search Filings by Company
-print("\n[Step 2.1] Searching filings by company...")
-stock_code = "005930"  # Samsung Electronics
-start_date = "2024-01-01"
-end_date = "2024-12-31"
-
-print(f"Stock code: {stock_code}")
-print(f"Date range: {start_date} to {end_date}")
-
-try:
-    print("Getting company list...")
-    corp_list = dart.get_corp_list()
-    print(f"✓ Loaded {len(corp_list.corps)} companies")
-    
-    print(f"Finding company with stock code: {stock_code}")
-    corp = corp_list.find_by_stock_code(stock_code)
-    
-    if not corp:
-        raise ValueError(f"No company found with stock code {stock_code}")
-    
-    print(f"✓ Company found: {corp.corp_name} ({corp.corp_code})")
-except Exception as e:
-    print(f"✗ Failed to get company: {e}")
-    raise
-
-try:
-    print("Searching filings...")
+    ❌ WRONG CODE:
     filings = corp.search_filings(
-        bgn_de=start_date.replace('-', ''),
-        end_de=end_date.replace('-', ''),
+        bgn_de='20240101',
+        end_de='20241231'
     )
+    # Result: Returned 0 or very few filings
+
+The issue: Did NOT specify pblntf_detail_ty parameter to filter by report type.
+Without this parameter, the API either returns all filings (overwhelming) or 
+filters in an unexpected way.
+
+RESULT:
+- For Samsung Electronics (stock code 005930)
+- Date range: 2024-01-01 to 2024-12-31
+- Expected: Multiple annual/semi-annual reports
+- Actually got: 0 filings
+
+This should have been an immediate red flag! Samsung definitely has annual 
+reports in 2024. The fact that we got 0 results should have triggered 
+investigation, not workarounds.
+
+MISTAKE: Instead of investigating, I:
+1. Created exp_02b to try broader search (without date filters)
+2. Still didn't find the root cause
+3. Moved on with hardcoded rcept_no values in exp_03b
+
+This violated POC Experiment Principles:
+- ❌ Hid the error instead of failing loudly
+- ❌ Used workarounds without understanding root cause
+- ❌ Created false confidence that the workflow was correct
+
+WHAT WE LEARNED:
+----------------
+1. **Always use sanity checks**: If Samsung has 0 annual reports, the CODE is 
+   wrong, not the data. Should have immediately stopped and investigated.
+
+2. **Read documentation thoroughly**: The dart-fss documentation clearly shows 
+   the pblntf_detail_ty parameter exists and is important for filtering.
+
+3. **Never hide errors in POC experiments**: Experiments should FAIL LOUDLY 
+   when assumptions are wrong. Silent failures or workarounds create false 
+   confidence.
+
+4. **Verify results match reality**: Before proceeding, check if results make 
+   sense. Zero filings for a major company = something is wrong.
+
+THE CORRECT APPROACH:
+---------------------
+✅ CORRECT CODE (from exp_02c_correct_search_api.py):
+
+    from dart_fss.api import filings
     
-    print(f"✓ Found {len(filings)} filing(s)")
+    # Method 1: Use Corp.search_filings() with pblntf_detail_ty
+    corp = corp_list.find_by_stock_code('005930')
+    annual_reports = corp.search_filings(
+        bgn_de='20230101',
+        pblntf_detail_ty='A001'  # ← THIS WAS MISSING!
+    )
+    # Result: 3 Samsung annual reports (2022, 2023, 2024) ✓
     
-    # Display first 5 filings
-    print("\nFirst 5 filings:")
-    for i, filing in enumerate(filings[:5], 1):
-        print(f"\n{i}. Filing:")
-        print(f"   rcept_no: {filing.rcept_no}")
-        print(f"   report_nm: {filing.report_nm}")
-        print(f"   flr_nm: {filing.flr_nm}")
-        print(f"   rcept_dt: {filing.rcept_dt}")
-        
-        # Check for more attributes
-        for attr in ['corp_code', 'corp_name', 'rm']:
-            if hasattr(filing, attr):
-                value = getattr(filing, attr)
-                if value:
-                    print(f"   {attr}: {value}")
+    # Method 2: Use search_annual_report() helper
+    from dart_fss.fs.extract import search_annual_report
     
-except Exception as e:
-    print(f"✗ Filing search failed: {e}")
-    raise
+    annual_reports = search_annual_report(
+        corp_code=corp.corp_code,
+        bgn_de='20230101',
+        end_de='20241231'
+    )
+    # Result: 2 Samsung annual reports ✓
 
-# Step 2.2: Extract Metadata from Filings
-print("\n[Step 2.2] Extracting metadata from filings...")
-metadata_list = []
+Report Type Codes:
+- 'A001': 사업보고서 (Annual Report)
+- 'A002': 반기보고서 (Semi-Annual Report)  
+- 'A003': 분기보고서 (Quarterly Report)
 
-print(f"Analyzing first 10 filings for metadata structure...")
-for i, filing in enumerate(filings[:10], 1):
-    print(f"  Processing filing {i}/10: {filing.rcept_no}")
-    
-    metadata = {
-        "rcept_no": filing.rcept_no,
-        "report_nm": filing.report_nm,
-        "rcept_dt": filing.rcept_dt,
-    }
-    
-    # Check for additional date fields
-    for attr in dir(filing):
-        if 'date' in attr.lower() or 'dt' in attr.lower():
-            value = getattr(filing, attr, None)
-            if value and not callable(value):
-                metadata[attr] = str(value)
-    
-    # Check for report type code
-    if hasattr(filing, 'pblntf_ty'):
-        metadata['report_type_code'] = filing.pblntf_ty
-    
-    # Check for amendment flag
-    if hasattr(filing, 'rm') and filing.rm:
-        metadata['remarks'] = filing.rm
-    
-    metadata_list.append(metadata)
+HOW WE IMPROVED:
+----------------
+1. Created exp_02c_correct_search_api.py that:
+   - Tests 3 different search methods systematically
+   - Documents which methods work and why
+   - Includes sanity checks for result validation
+   - Fails loudly when results don't make sense
 
-# Display sample metadata
-print("\n✓ Metadata extraction complete")
-print("\nSample metadata structure (first filing):")
-print(json.dumps(metadata_list[0], indent=2, ensure_ascii=False))
+2. Updated experiments.md with "Experiment Principles (CRITICAL)":
+   - Never Fake Results
+   - Never Hide Errors
+   - Always Investigate Failures
+   - Test with Real Data
 
-# Save all metadata
-output_file = Path("./experiments/data/filing_metadata.json")
-with open(output_file, 'w', encoding='utf-8') as f:
-    json.dump(metadata_list, f, indent=2, ensure_ascii=False)
+3. Updated implementation.md with "POC Experiment Rules":
+   - Rule 1: Real Data Only
+   - Rule 2: No Silent Failures
+   - Rule 3: Document Why, Not Just What
+   - Rule 4: Verify Results Make Sense
 
-print(f"\n✓ Metadata saved to {output_file}")
+4. Created FINDINGS.md to document the complete investigation and lessons
 
-# Step 2.3: Filter by Report Type
-print("\n[Step 2.3] Filtering by report type...")
+REPLACEMENT:
+------------
+This experiment is replaced by:
+→ experiments/exp_02c_correct_search_api.py
 
-REPORT_TYPES = {
-    'A001': '사업보고서',  # Annual
-    'A002': '반기보고서',  # Semi-annual
-    'A003': '분기보고서',  # Quarterly
-}
+See also:
+→ experiments/FINDINGS.md for complete root cause analysis
+→ docs/vibe_coding/experiments.md for updated POC principles
+→ docs/vibe_coding/implementation.md for POC experiment rules
 
-print(f"Filtering for: {REPORT_TYPES['A001']}, {REPORT_TYPES['A002']}")
+KEY TAKEAWAY:
+-------------
+In POC experiments, getting zero results when you expect many is NOT a "close 
+enough" situation. It's a critical failure that requires immediate investigation.
 
-filtered_filings = []
-for filing in filings:
-    if any(report_nm in filing.report_nm for report_nm in [REPORT_TYPES['A001'], REPORT_TYPES['A002']]):
-        filtered_filings.append({
-            'rcept_no': filing.rcept_no,
-            'report_nm': filing.report_nm,
-            'rcept_dt': filing.rcept_dt,
-        })
+Never move forward with workarounds (hardcoded values) when the underlying 
+system behavior doesn't match reality. That's how you build confidence in 
+broken systems.
 
-print(f"✓ Filtered to {len(filtered_filings)} annual/semi-annual reports")
+POC experiments are meant to PROVE concepts work with real data. If they don't 
+work, that's valuable information—don't hide it!
 
-# Display filtered results
-print("\nFiltered results (first 5):")
-for i, f in enumerate(filtered_filings[:5], 1):
-    print(f"{i}. {f['report_nm']} - {f['rcept_dt']} - {f['rcept_no']}")
-
-# Save filtered list
-output_file = Path("./experiments/data/filtered_filings.json")
-with open(output_file, 'w', encoding='utf-8') as file:
-    json.dump(filtered_filings, file, indent=2, ensure_ascii=False)
-
-print(f"\n✓ Filtered filings saved to {output_file}")
-
-print("\n" + "=" * 80)
-print("✅ EXPERIMENT 2 COMPLETE: Filing search and metadata extraction successful!")
-print("=" * 80)
-print(f"\nSummary:")
-print(f"  - Total filings found: {len(filings)}")
-print(f"  - Annual/semi-annual reports: {len(filtered_filings)}")
-print(f"  - Metadata samples analyzed: {len(metadata_list)}")
-print(f"  - Output files created: 2 JSON files")
-
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+This file kept as lessons learned reference. Do not execute.
+Use exp_02c_correct_search_api.py for the correct implementation.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
