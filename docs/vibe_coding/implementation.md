@@ -786,18 +786,20 @@ def validate_date_yyyymmdd(date: str) -> str:
 from pydantic import BaseModel, field_validator
 from typing import List
 
-class SearchFilingsRequest(BaseModel):
+class FetchReportsRequest(BaseModel):
     """
-    Request model for filing search.
-    All fields are automatically validated.
+    Request model for Phase 1: fetch_reports() validation.
+    All fields are automatically validated against types.yaml.
     """
-    stock_code: str
+    stock_codes: List[str]  # Multiple stock codes
     start_date: str
     end_date: str
     report_types: List[str]
     
     # Apply validators using field_validator decorator
-    _validate_stock_code = field_validator('stock_code')(validate_stock_code)
+    _validate_stock_codes = field_validator('stock_codes')(
+        lambda codes: [validate_stock_code(c) for c in codes]
+    )
     _validate_start_date = field_validator('start_date')(validate_date_yyyymmdd)
     _validate_end_date = field_validator('end_date')(validate_date_yyyymmdd)
     _validate_report_types = field_validator('report_types')(validate_report_types)
@@ -805,28 +807,43 @@ class SearchFilingsRequest(BaseModel):
     model_config = {
         "json_schema_extra": {
             "examples": [{
-                "stock_code": "005930",
+                "stock_codes": ["005930", "000660"],
                 "start_date": "20240101",
                 "end_date": "20241231",
-                "report_types": ["A001", "A002"]
+                "report_types": ["A001", "A002"]  # Actual DART codes
             }]
         }
     }
 ```
 
-**Usage in Functions**:
+**Usage in Pipeline**:
 ```python
-def search_filings(stock_code: str, start_date: str, end_date: str, report_types: List[str]):
-    # Validation happens automatically via Pydantic
-    request = SearchFilingsRequest(
-        stock_code=stock_code,
-        start_date=start_date,
-        end_date=end_date,
-        report_types=report_types
-    )
-    
-    # Now guaranteed all inputs are valid!
-    # Proceed with dart-fss API calls...
+class DisclosurePipeline:
+    def fetch_reports(
+        self, 
+        stock_codes: List[str], 
+        start_date: str, 
+        end_date: str, 
+        report_types: List[str]
+    ) -> Dict[str, int]:
+        """
+        Phase 1: Search, download, parse, and store filings.
+        
+        Prerequisite: Phase 0 (corp_list) must be loaded.
+        """
+        # Validation happens automatically via Pydantic
+        request = FetchReportsRequest(
+            stock_codes=stock_codes,
+            start_date=start_date,
+            end_date=end_date,
+            report_types=report_types  # Actual codes like ["A001", "A002"]
+        )
+        
+        # Now guaranteed all inputs are valid!
+        # Convert stock codes to corp codes using Phase 0 cache
+        corp_codes = [self._corp_manager.get_corp_code(sc) for sc in stock_codes]
+        
+        # Proceed with dart-fss API calls...
 ```
 
 ---
@@ -842,12 +859,19 @@ class ReportTypes:
     
     @staticmethod
     def list_available() -> Dict[str, str]:
-        """List all valid report type codes."""
+        """List all valid report type codes from types.yaml."""
         return get_config().pblntf_detail_ty.copy()
     
     @staticmethod
+    def list_periodic() -> Dict[str, str]:
+        """List only periodic report types (A001, A002, A003)."""
+        all_types = get_config().pblntf_detail_ty
+        periodic_codes = ['A001', 'A002', 'A003']
+        return {k: v for k, v in all_types.items() if k in periodic_codes}
+    
+    @staticmethod
     def list_by_category(prefix: str) -> Dict[str, str]:
-        """List report types by category (A, B, etc.)."""
+        """List report types by category (A, B, C, etc.)."""
         all_types = get_config().pblntf_detail_ty
         return {k: v for k, v in all_types.items() if k.startswith(prefix)}
     
@@ -855,6 +879,38 @@ class ReportTypes:
     def get_description(code: str) -> str:
         """Get description for a report type code."""
         return get_config().get_report_description(code)
+
+
+# Example usage
+class CorpClass:
+    """Helper for discovering corporation classifications."""
+    
+    @staticmethod
+    def list_available() -> Dict[str, str]:
+        """List all corp_cls codes (KOSPI, KOSDAQ, etc.)."""
+        return get_config().corp_cls.copy()
+```
+
+**User-Facing Discovery**:
+```python
+# Users discover valid codes before calling fetch_reports()
+from dart_fss_text import ReportTypes
+
+# See all available report types
+all_types = ReportTypes.list_available()
+# → {'A001': '사업보고서', 'A002': '반기보고서', ...}
+
+# Get only periodic reports (MVP focus)
+periodic = ReportTypes.list_periodic()
+# → {'A001': '사업보고서', 'A002': '반기보고서', 'A003': '분기보고서'}
+
+# Then use actual codes in fetch_reports()
+pipeline.fetch_reports(
+    stock_codes=["005930"],
+    start_date="20240101",
+    end_date="20241231",
+    report_types=["A001", "A002"]  # Use codes directly, no aliases
+)
 ```
 
 **CLI Integration**:
@@ -863,6 +919,14 @@ class ReportTypes:
 def list_types():
     """List all available report types."""
     types = ReportTypes.list_available()
+    for code, desc in sorted(types.items()):
+        click.echo(f"{code}: {desc}")
+
+@click.command()
+@click.option('--category', default='A', help='Report category (A, B, C, etc.)')
+def list_category(category: str):
+    """List report types by category."""
+    types = ReportTypes.list_by_category(category)
     for code, desc in sorted(types.items()):
         click.echo(f"{code}: {desc}")
 ```
