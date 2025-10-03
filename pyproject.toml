@@ -37,9 +37,11 @@ addopts = [
     "-v",
     "--tb=short",
     "--strict-markers",
-    "--disable-warnings"
+    "--disable-warnings",
+    "-m", "not smoke"  # Skip smoke tests by default
 ]
 markers = [
   "unit: fast, no network",
-  "integration: may touch filesystem/network"
+  "integration: may touch filesystem/network",
+  "smoke: quick live API sanity checks (requires API key, disabled by default)"
 ]
