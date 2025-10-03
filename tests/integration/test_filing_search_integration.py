@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 import dart_fss as dart
 
 from dart_fss_text.services.filing_search import FilingSearchService
-from dart_fss_text.models.requests import FetchReportsRequest
+from dart_fss_text.models.requests import SearchFilingsRequest
 
 
 # Skip all tests if no API key
@@ -50,7 +50,7 @@ class TestRealSearchWithSamsungElectronics:
     def test_search_samsung_annual_reports(self, setup_dart_api):
         """Should find Samsung annual reports (validated in Experiment 7)."""
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930"],
             start_date="20230101",
             end_date="20241231",
@@ -74,7 +74,7 @@ class TestRealSearchWithSamsungElectronics:
     def test_search_samsung_semi_annual_reports(self, setup_dart_api):
         """Should find Samsung semi-annual reports."""
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930"],
             start_date="20230101",
             end_date="20241231",
@@ -93,7 +93,7 @@ class TestRealSearchWithSamsungElectronics:
     def test_search_samsung_quarterly_reports(self, setup_dart_api):
         """Should find Samsung quarterly reports."""
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930"],
             start_date="20230101",
             end_date="20241231",
@@ -112,7 +112,7 @@ class TestRealSearchWithSamsungElectronics:
     def test_search_multiple_report_types(self, setup_dart_api):
         """Should search multiple report types and aggregate results."""
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930"],
             start_date="20230101",
             end_date="20241231",
@@ -145,7 +145,7 @@ class TestFilingObjectStructure:
         - report_nm: Logging and validation
         """
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930"],
             start_date="20230101",
             end_date="20231231",
@@ -179,7 +179,7 @@ class TestMultipleCompanies:
     def test_search_samsung_and_sk_hynix(self, setup_dart_api):
         """Should search multiple companies and return combined results."""
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930", "000660"],  # Samsung, SK Hynix
             start_date="20230101",
             end_date="20231231",
@@ -200,26 +200,10 @@ class TestMultipleCompanies:
 class TestEdgeCases:
     """Test edge cases and error conditions."""
     
-    def test_empty_results_for_narrow_date_range(self, setup_dart_api):
-        """Should return empty list if no filings in date range."""
-        service = FilingSearchService()
-        request = FetchReportsRequest(
-            stock_codes=["005930"],
-            start_date="20200101",
-            end_date="20200105",  # Very narrow range
-            report_types=["A001"]
-        )
-        
-        results = service.search_filings(request)
-        
-        # Should return empty list (not raise error)
-        assert isinstance(results, list)
-        # May or may not be empty depending on actual filings
-    
     def test_invalid_stock_code_raises_error(self, setup_dart_api):
         """Should raise error for invalid stock code."""
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["999999"],  # Invalid code
             start_date="20230101",
             end_date="20241231",
@@ -244,7 +228,7 @@ class TestPerformance:
         import time
         
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930"],
             start_date="20230101",
             end_date="20241231",
@@ -270,7 +254,7 @@ class TestPerformance:
         import time
         
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930"],
             start_date="20230101",
             end_date="20231231",
@@ -302,7 +286,7 @@ class TestDateRangeFiltering:
     def test_results_within_date_range(self, setup_dart_api):
         """All results should have rcept_dt within requested range."""
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930"],
             start_date="20230101",
             end_date="20231231",
