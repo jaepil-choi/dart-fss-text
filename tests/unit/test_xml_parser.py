@@ -23,9 +23,18 @@ class TestTOCMapping:
     
     def test_load_toc_mapping(self):
         """Should load toc.yaml and create title → section_code mapping."""
-        # TODO: Implement load_toc_mapping()
-        # Expected: 123 section mappings for A001
-        pass
+        from src.dart_fss_text.parsers import load_toc_mapping
+        
+        mapping = load_toc_mapping()
+        
+        # Should have 123 sections for A001
+        assert len(mapping) == 123, f"Expected 123 sections, got {len(mapping)}"
+        
+        # Should contain major sections
+        assert 'I. 회사의 개요' in mapping
+        assert mapping['I. 회사의 개요'] == '010000'
+        assert 'II. 사업의 내용' in mapping
+        assert mapping['II. 사업의 내용'] == '020000'
     
     def test_toc_contains_major_sections(self):
         """Should contain all 12 major sections (I-XII)."""
@@ -50,9 +59,21 @@ class TestSectionIndexing:
     
     def test_build_section_index(self, xml_tree):
         """Should build index of all SECTION-N elements."""
-        # TODO: Implement build_section_index()
-        # Expected: 53 sections found
-        pass
+        from src.dart_fss_text.parsers import load_toc_mapping, build_section_index
+        
+        toc_mapping = load_toc_mapping()
+        index = build_section_index(TEST_XML, toc_mapping)
+        
+        # Should find ~53 sections
+        assert len(index) >= 50, f"Expected ~53 sections, got {len(index)}"
+        assert len(index) <= 60, f"Expected ~53 sections, got {len(index)}"
+        
+        # Index should have proper structure
+        for atocid, metadata in index.items():
+            assert 'level' in metadata
+            assert 'title' in metadata
+            assert 'atocid' in metadata
+            assert 'element' in metadata
     
     def test_extract_atocid_from_title_tag(self, xml_tree):
         """CRITICAL: ATOCID is on TITLE tag, NOT SECTION tag."""
@@ -223,20 +244,53 @@ class TestSectionExtraction:
     
     def test_extract_section_020000(self):
         """Should extract section 020000 (II. 사업의 내용)."""
-        # TODO: Implement extract_section_by_code()
+        from src.dart_fss_text.parsers import load_toc_mapping, build_section_index, extract_section_by_code
+        
+        toc_mapping = load_toc_mapping()
+        index = build_section_index(TEST_XML, toc_mapping)
+        section = extract_section_by_code(index, '020000')
+        
+        assert section is not None, "Section 020000 should exist"
+        assert section['title'] == 'II. 사업의 내용'
+        assert section['section_code'] == '020000'
+        
         # Expected: 150 paragraphs, 89 tables, 7 subsections
-        pass
+        assert len(section['paragraphs']) >= 140, f"Expected ~150 paragraphs, got {len(section['paragraphs'])}"
+        assert len(section['tables']) >= 80, f"Expected ~89 tables, got {len(section['tables'])}"
+        assert len(section['subsections']) == 7, f"Expected 7 subsections, got {len(section['subsections'])}"
     
     def test_extract_section_020100(self):
         """Should extract section 020100 (1. 사업의 개요)."""
+        from src.dart_fss_text.parsers import load_toc_mapping, build_section_index, extract_section_by_code
+        
+        toc_mapping = load_toc_mapping()
+        index = build_section_index(TEST_XML, toc_mapping)
+        section = extract_section_by_code(index, '020100')
+        
+        assert section is not None, "Section 020100 should exist"
+        assert section['title'] == '1. 사업의 개요'
+        assert section['section_code'] == '020100'
+        
         # Expected: 6 paragraphs, 0 tables, 0 subsections
-        # Expected first paragraph starts with: "당사는 본사를 거점으로"
-        pass
+        assert len(section['paragraphs']) == 6, f"Expected 6 paragraphs, got {len(section['paragraphs'])}"
+        assert len(section['tables']) == 0, f"Expected 0 tables, got {len(section['tables'])}"
+        assert len(section['subsections']) == 0, f"Expected 0 subsections, got {len(section['subsections'])}"
+        
+        # Check first paragraph starts correctly
+        assert section['paragraphs'][0].startswith('당사는 본사를 거점으로')
     
     def test_section_contains_full_text(self):
         """Should extract complete text content."""
-        # TODO: Verify paragraph 6 contains "258조 9,355억원"
-        pass
+        from src.dart_fss_text.parsers import load_toc_mapping, build_section_index, extract_section_by_code
+        
+        toc_mapping = load_toc_mapping()
+        index = build_section_index(TEST_XML, toc_mapping)
+        section = extract_section_by_code(index, '020100')
+        
+        # Verify paragraph 6 contains revenue information
+        assert len(section['paragraphs']) >= 6
+        last_paragraph = section['paragraphs'][5]  # 6th paragraph (0-indexed)
+        assert '258조' in last_paragraph or '258조 9,355억원' in last_paragraph
     
     def test_section_contains_subsections(self):
         """Should recursively extract subsections."""
