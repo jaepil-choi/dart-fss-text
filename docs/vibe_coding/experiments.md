@@ -989,16 +989,214 @@ experiments/data/raw/
 
 ---
 
+## Phase 4: XML Parsing & Section Extraction
+
+### Experiment 10: XML Structure Exploration with SECTION-N Hierarchy
+
+**Date**: 2025-10-03  
+**Status**: 🚧 **PLANNED**
+
+#### Objective
+
+Understand DART XML structure and validate parsing approach for extracting textual content from 사업보고서 (Annual Reports, A001). Build foundation for production XML parser that extracts narrative sections, tables, and hierarchical content.
+
+**Key Focus**: Structure exploration, NOT full implementation. Validate approach before TDD.
+
+#### Background & Context
+
+DART XML files are large (155K+ lines for Samsung annual report) with mixed HTML-like tags (`<P>`, `<TABLE>`, `<SPAN>`) embedded in structured XML. From documentation review:
+
+- **Source**: `docs/research/how-to-parse-dart-reports.md`, `docs/research/dart-report-guide.md`
+- **XML Structure**: Hierarchical `<SECTION-N>` tags (N=1,2,3...) with `<TITLE>` elements
+- **Standard TOC**: `config/toc.yaml` defines standardized section codes for A001
+- **Encoding**: UTF-8 for modern documents (EUC-KR for legacy, but not MVP focus)
+- **Critical Finding**: Main XML file is `{rcept_no}.xml`, ignore `{rcept_no}_XXXXX.xml` supplementary files
+
+#### Design Decisions
+
+Based on documentation and sample XML analysis:
+
+**✅ Strategy: SECTION-N + TITLE Hierarchy**
+- Use `<SECTION-1>`, `<SECTION-2>`, `<SECTION-3>` tags as primary structure
+- Extract section titles from `<TITLE>` elements
+- Map titles to standardized section codes using `config/toc.yaml`
+- **Rationale**: Clean hierarchy, matches official DART structure, reliable
+
+**❌ NOT Using: USERMARK Patterns (for now)**
+- USERMARK attributes exist (e.g., `USERMARK="F-14 B"`) but purposes vary
+- Some mark subsection headers, others mark formatting (bold, colors)
+- Leave door open for regex/USERMARK fallback, but prioritize SECTION-N
+- **Rationale**: SECTION-N is more reliable; USERMARK can supplement later
+
+**✅ Focus: A001 (Annual Reports) Only**
+- Start with A001 사업보고서 structure from `config/toc.yaml`
+- A002 (Semi-annual), A003 (Quarterly) can reuse parser with different TOC
+- **Rationale**: MVP focus, validate approach before expanding
+
+**✅ Parsing Strategy: On-Demand with Indexing**
+- **Pass 1**: Build lightweight section index (fast scan, no text extraction)
+- **Pass 2**: Extract specific section when requested (lazy loading)
+- **Rationale**: Memory efficient for 155K line files, faster for single-section queries
+
+**✅ Priority Section: "II. 사업의 내용" (Section Code: 020000)**
+- Most valuable narrative content for textual analysis
+- Contains business description, products, risks, etc.
+- **Rationale**: High-value section for NLP/sentiment analysis use cases
+
+#### Parsing Approach
+
+**3-Layer Strategy:**
+
+```
+Layer 1: Section Index (Lightweight)
+├─ Scan all <SECTION-N> tags using lxml.etree.iterparse()
+├─ Extract: level, ATOCID, TITLE, ACLASS
+├─ Map: Title → section_code (using toc.yaml)
+└─ Store: {atocid: {level, title, section_code, element_ref}}
+
+Layer 2: Section Extraction (On-Demand)
+├─ Find target section by section_code (e.g., '020000')
+├─ Extract from cached element reference
+├─ Parse: paragraphs, tables, subsections
+└─ Return: Structured section object
+
+Layer 3: Content Parsing (Detailed)
+├─ Paragraphs: Extract <P> tags, join text, skip empty
+├─ Tables: Parse <TABLE ACLASS="NORMAL"> with THEAD/TBODY
+├─ Subsections: Recursively process child <SECTION-N> tags
+└─ Preserve hierarchy: section → subsection → content
+```
+
+#### Workflow Steps
+
+**1. Load TOC Mapping**
+```python
+# Load config/toc.yaml
+# Create: title → section_code mapping
+# Example: "II. 사업의 내용" → "020000"
+```
+
+**2. Build Section Index (sample.xml)**
+```python
+# Test on sample.xml first (837 lines)
+# Extract all SECTION-N tags
+# Map titles to section codes
+# Measure: sections found, mapping accuracy
+```
+
+**3. Extract Target Section**
+```python
+# Extract section_code='020000' (II. 사업의 내용)
+# Count: paragraphs, tables, subsections
+# Validate: content completeness
+```
+
+**4. Validate Coverage**
+```python
+# Compare extracted sections vs. toc.yaml structure
+# Report: coverage rate, missing sections
+# Note: sample.xml is truncated (only first 837 lines)
+```
+
+**5. Test on Full XML**
+```python
+# Repeat on full 155K line XML (20240312000736.xml)
+# Measure: indexing time, extraction time
+# Validate: coverage rate should be ~95%+
+# Save: results to exp_10_results.json
+```
+
+#### Expected Outcomes
+
+**Success Criteria:**
+
+1. ✅ Section index builds successfully on both sample and full XML
+2. ✅ TITLE → section_code mapping achieves ≥90% accuracy
+3. ✅ Target section (020000) extracted with complete content
+4. ✅ Full XML coverage rate ≥90% (some sections may be optional)
+5. ✅ Indexing time < 1 second for 155K lines
+6. ✅ Section extraction time < 0.2 seconds per section
+7. ✅ Hierarchical structure preserved (section → subsection → content)
+
+**Deliverables:**
+
+- `experiments/exp_10_xml_structure_exploration.py` - Main experiment script
+- `experiments/data/exp_10_results.json` - Performance metrics and findings
+- Documentation in `FINDINGS.md` - Observations and edge cases
+- Helper functions ready for unit testing
+
+**Questions to Answer:**
+
+1. **Coverage**: How many toc.yaml sections are found in actual XML?
+2. **Mapping Accuracy**: Do XML titles exactly match toc.yaml names?
+3. **Performance**: Can we index 155K lines in < 1 second?
+4. **Edge Cases**: Missing sections? Duplicate titles? Malformed structure?
+5. **Table Complexity**: Are tables simple (headers + rows) or complex (colspan/rowspan)?
+6. **Paragraph Structure**: Are paragraphs atomic or nested?
+
+#### Implementation Notes
+
+**Libraries:**
+- `lxml` (already in pyproject.toml) - XML parsing with recover mode
+- `yaml` (already in pyproject.toml) - TOC mapping
+- `json` - Results serialization
+
+**XML Parser Configuration:**
+```python
+parser = etree.XMLParser(
+    recover=True,      # Handle malformed XML gracefully
+    huge_tree=True,    # Allow large documents (155K lines)
+    encoding='utf-8'   # Modern DART documents are UTF-8
+)
+```
+
+**Key Functions to Implement:**
+1. `load_toc_mapping()` - Parse toc.yaml into dict
+2. `build_section_index()` - Scan SECTION-N tags
+3. `map_title_to_section_code()` - Match titles with fuzzy logic
+4. `extract_section_by_code()` - Get specific section
+5. `parse_section_content()` - Parse paragraphs/tables/subsections
+6. `parse_table()` - Extract table headers and rows
+7. `validate_section_coverage()` - Compare vs. toc.yaml
+
+#### Risks & Mitigations
+
+| Risk | Probability | Impact | Mitigation |
+|------|-------------|--------|------------|
+| Title mismatch with toc.yaml | High | Medium | Add fuzzy matching, normalization |
+| Missing sections in XML | Medium | Low | Mark as optional, report coverage |
+| Complex nested tables | Medium | Medium | Document in findings, handle in Exp 11 |
+| Performance on 155K lines | Low | Medium | Use iterparse(), streaming approach |
+| Malformed XML structure | Low | High | Use lxml recover mode, log errors |
+
+#### Next Steps After Experiment 10
+
+1. **Document findings** - Update FINDINGS.md with observations
+2. **Review results** - Manual inspection of extracted "II. 사업의 내용"
+3. **Experiment 11** - Table parsing deep dive (if tables are complex)
+4. **Write tests** - TDD for section indexing and extraction
+5. **Implement parsers** - Move to `src/dart_fss_text/parsers/`
+   - `xml_parser.py` - Low-level XML utilities
+   - `section_parser.py` - Section extraction logic
+   - `table_parser.py` - Table parsing (if needed separately)
+
+---
+
 ## Status
 
-**Current Status**: 🚧 **Phase 3 Planned - Ready for Experiment 7**
+**Current Status**: 🚧 **Phase 4 Planned - Ready for Experiment 10**
 
 **Completed:**
-- ✅ Phase 1: Discovery & Download Pipeline (Experiments 1-4)
+- ✅ Phase 1: Filing Discovery v0.1.0 (Experiments 1-4, 8)
 - ✅ Phase 2: Corporation List Mapping (Experiment 5-6)
 
 **In Progress:**
-- 🚧 Phase 3: Production-Ready Search & Download (Experiment 7)
+- 🚧 Phase 4: XML Parsing & Section Extraction (Experiment 10)
 
-**Next:** Execute Experiment 7, then implement production services using TDD.
+**Pending:**
+- ⏳ Phase 3: Production-Ready Search & Download (Experiment 7, 9)
+- ⏳ Phase 5: MongoDB Storage Layer
+- ⏳ Phase 6: End-to-End Pipeline Integration
+
+**Next:** Execute Experiment 10 to validate XML parsing approach with SECTION-N hierarchy.
 
