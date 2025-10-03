@@ -780,13 +780,225 @@ filings = corp.search_filings(...)
 
 ---
 
+---
+
+## Phase 3: Filing Search and Download Service (Production-Ready)
+
+### Experiment 7: Complete Search → Download → Organize Pipeline
+
+**Date**: 2025-10-03  
+**Status**: 🚧 **PLANNED**
+
+#### Objective
+Validate the complete production workflow: search filings using correct dart-fss API → download XMLs → organize in PIT-aware directory structure → cleanup ZIP files.
+
+This experiment bridges the gap between POC (Experiments 1-4) and production implementation (TODO #7 + #8).
+
+#### Key Differences from Previous Experiments
+- **Uses Working Search API**: `Corp.search_filings()` with `pblntf_detail_ty` parameter (validated in Experiment 2C)
+- **PIT-Aware Directory Structure**: `data/raw/{year}/{corp_code}/{rcept_no}.xml` where `year` is extracted from `rcept_dt`
+- **ZIP Cleanup**: Delete ZIP files after successful extraction to save disk space
+- **Multiple Report Types**: Test with A001 (annual), A002 (semi-annual), A003 (quarterly)
+- **Real-World Scale**: Process 5-10 reports to validate performance
+
+#### Search Strategy (From Experiment 2C)
+✅ **Method 3 (WORKS)**: `Corp.search_filings()` with `pblntf_detail_ty`
+```python
+corp = dart.get_corp_list().find_by_stock_code("005930")
+filings = corp.search_filings(
+    bgn_de='20230101',
+    pblntf_detail_ty='A001'  # A001, A002, or A003
+)
+# Returns: List[Filing] with rcept_no, report_nm, rcept_dt, corp_code
+```
+
+#### Workflow Steps
+
+**1. Search Filings (Multiple Report Types)**
+```python
+stock_code = "005930"  # Samsung
+report_types = ["A001", "A002", "A003"]  # Annual, Semi-annual, Quarterly
+
+# Get corp
+corp_list = dart.get_corp_list()
+corp = corp_list.find_by_stock_code(stock_code)
+
+# Search each report type
+all_filings = []
+for report_type in report_types:
+    filings = corp.search_filings(
+        bgn_de='20230101',
+        end_de='20241231',
+        pblntf_detail_ty=report_type
+    )
+    all_filings.extend(filings)
+    print(f"✓ {report_type}: {len(filings)} reports")
+
+print(f"Total: {len(all_filings)} reports found")
+```
+
+**2. Download and Organize (PIT-Aware Structure)**
+```python
+from pathlib import Path
+import zipfile
+from dart_fss.api.filings import download_document
+
+for filing in all_filings[:10]:  # Limit to 10 for testing
+    # Extract year from rcept_dt (publication date)
+    rcept_dt = filing.rcept_dt  # e.g., "20230307"
+    year = rcept_dt[:4]  # "2023"
+    corp_code = filing.corp_code  # "00126380"
+    rcept_no = filing.rcept_no
+    
+    # PIT-aware directory structure
+    year_dir = Path(f"experiments/data/raw/{year}")
+    corp_dir = year_dir / corp_code
+    corp_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Download ZIP to temp location
+    zip_path = corp_dir / f"{rcept_no}.zip"
+    
+    if not zip_path.exists():
+        print(f"\n[{filing.report_nm}] Downloading...")
+        download_document(
+            path=str(corp_dir) + "/",
+            rcept_no=rcept_no
+        )
+        print(f"  ✓ Downloaded: {zip_path.name}")
+    else:
+        print(f"\n[{filing.report_nm}] Already exists: {zip_path.name}")
+    
+    # Extract main XML: {rcept_no}.xml
+    xml_path = corp_dir / f"{rcept_no}.xml"
+    
+    if not xml_path.exists():
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            # Extract only the main XML (validated in FINDINGS.md)
+            main_xml = f"{rcept_no}.xml"
+            if main_xml in zip_ref.namelist():
+                zip_ref.extract(main_xml, corp_dir)
+                print(f"  ✓ Extracted: {xml_path.name}")
+            else:
+                print(f"  ⚠ Warning: {main_xml} not found in ZIP")
+                print(f"    Available files: {zip_ref.namelist()}")
+    
+    # Cleanup ZIP file
+    if xml_path.exists() and zip_path.exists():
+        zip_path.unlink()
+        print(f"  ✓ Cleaned up: {zip_path.name}")
+    
+    # Store metadata
+    metadata = {
+        'rcept_no': rcept_no,
+        'rcept_dt': rcept_dt,
+        'year': year,
+        'corp_code': corp_code,
+        'report_nm': filing.report_nm,
+        'xml_path': str(xml_path),
+        'file_size_mb': xml_path.stat().st_size / (1024*1024) if xml_path.exists() else 0
+    }
+    print(f"  • Size: {metadata['file_size_mb']:.2f} MB")
+```
+
+**3. Verify PIT-Aware Structure**
+```python
+# Example: 2022 FY report published on 2023-03-07
+# Should be stored in: data/raw/2023/00126380/20230307000542.xml
+# NOT in: data/raw/2022/... (would cause forward-looking bias!)
+
+print("\n" + "="*60)
+print("DIRECTORY STRUCTURE VALIDATION")
+print("="*60)
+
+for year_dir in Path("experiments/data/raw").iterdir():
+    if year_dir.is_dir():
+        year = year_dir.name
+        xml_count = len(list(year_dir.rglob("*.xml")))
+        print(f"\n{year}/")
+        
+        for corp_dir in year_dir.iterdir():
+            if corp_dir.is_dir():
+                corp_code = corp_dir.name
+                xmls = list(corp_dir.glob("*.xml"))
+                print(f"  {corp_code}/ ({len(xmls)} XMLs)")
+                for xml in xmls[:3]:  # Show first 3
+                    print(f"    - {xml.name}")
+```
+
+**4. Save Results Summary**
+```python
+import json
+
+summary = {
+    'total_searched': len(all_filings),
+    'total_downloaded': 0,  # Count from actual downloads
+    'report_types': {},  # Count per type
+    'years': {},  # Count per year
+    'errors': []
+}
+
+# Save to experiments/data/exp_07_results.json
+output_file = Path("experiments/data/exp_07_results.json")
+with open(output_file, 'w', encoding='utf-8') as f:
+    json.dump(summary, f, indent=2, ensure_ascii=False)
+
+print(f"\n✓ Results saved to {output_file}")
+```
+
+#### Expected Directory Structure
+```
+experiments/data/raw/
+├── 2023/
+│   └── 00126380/  (Samsung)
+│       ├── 20230307000542.xml  (2022 FY Annual - published 2023-03-07)
+│       └── 20230814000123.xml  (2023 Q2 Semi-annual)
+└── 2024/
+    └── 00126380/
+        ├── 20240312000736.xml  (2023 FY Annual - published 2024-03-12)
+        └── 20240814000456.xml  (2024 Q2 Semi-annual)
+```
+
+#### Success Criteria
+1. ✅ Search returns results for all 3 report types (A001, A002, A003)
+2. ✅ Downloads complete successfully without errors
+3. ✅ XMLs organized in PIT-aware structure: `{year}/{corp_code}/{rcept_no}.xml`
+4. ✅ Year extracted correctly from `rcept_dt` (publication date)
+5. ✅ ZIP files cleaned up after extraction
+6. ✅ No ZIP files remain in data/raw/
+7. ✅ All XMLs are valid and parseable
+8. ✅ Metadata summary saved for analysis
+
+#### Validation Checklist
+- [ ] `Corp.search_filings()` with `pblntf_detail_ty` returns expected results
+- [ ] Download speed is reasonable (~2-5s per document)
+- [ ] Main XML file (`{rcept_no}.xml`) exists in every ZIP
+- [ ] PIT structure prevents forward-looking bias (2022 FY in 2023/)
+- [ ] No orphaned ZIP files after completion
+- [ ] XML file sizes are reasonable (0.5-5 MB)
+- [ ] No duplicate downloads (idempotent operation)
+
+#### Files to Create
+- `experiments/exp_07_search_download_organize.py`: Main experiment script
+- `experiments/data/exp_07_results.json`: Summary statistics
+
+#### Next Steps After Completion
+1. Document findings in `FINDINGS.md`
+2. Write unit tests for Filing Search Service (TODO #7)
+3. Write unit tests for Download Service (TODO #8)
+4. Implement production services in `src/dart_fss_text/services/`
+
+---
+
 ## Status
 
-**Current Status**: ✅ **Phase 1 & Phase 2 POC Complete**
+**Current Status**: 🚧 **Phase 3 Planned - Ready for Experiment 7**
 
 **Completed:**
-- Phase 1: Discovery & Download Pipeline
-- Phase 2: Corporation List Mapping
+- ✅ Phase 1: Discovery & Download Pipeline (Experiments 1-4)
+- ✅ Phase 2: Corporation List Mapping (Experiment 5-6)
 
-**Next:** Production implementation of Discovery and Download services using TDD.
+**In Progress:**
+- 🚧 Phase 3: Production-Ready Search & Download (Experiment 7)
+
+**Next:** Execute Experiment 7, then implement production services using TDD.
 
