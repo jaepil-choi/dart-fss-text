@@ -17,13 +17,13 @@ class TestSearchFilingsRequest:
         from dart_fss_text.models.requests import SearchFilingsRequest
         
         request = SearchFilingsRequest(
-            stock_code='005930',
+            stock_codes=['005930'],
             start_date='20240101',
             end_date='20241231',
             report_types=['A001', 'A002']
         )
         
-        assert request.stock_code == '005930'
+        assert request.stock_codes == ['005930']
         assert request.start_date == '20240101'
         assert request.end_date == '20241231'
         assert request.report_types == ['A001', 'A002']
@@ -34,31 +34,31 @@ class TestSearchFilingsRequest:
         
         # Parameters from exp_04_corrected_pipeline.py
         request = SearchFilingsRequest(
-            stock_code='005930',
+            stock_codes=['005930'],
             start_date='20240101',
             end_date='20241231',
             report_types=['A001', 'A002', 'A003']
         )
         
-        assert request.stock_code == '005930'
+        assert request.stock_codes == ['005930']
         assert len(request.report_types) == 3
     
     def test_validates_stock_code_automatically(self):
-        """Should validate stock_code using validate_stock_code."""
+        """Should validate stock_codes using validate_stock_code."""
         from dart_fss_text.models.requests import SearchFilingsRequest
         
         # Invalid stock code should raise ValidationError
         with pytest.raises(ValidationError) as exc_info:
             SearchFilingsRequest(
-                stock_code='INVALID',
+                stock_codes=['INVALID'],
                 start_date='20240101',
                 end_date='20241231',
                 report_types=['A001']
             )
         
-        # Check that error is for stock_code field
+        # Check that error is for stock_codes field
         errors = exc_info.value.errors()
-        assert any(e['loc'] == ('stock_code',) for e in errors)
+        assert any(e['loc'] == ('stock_codes',) for e in errors)
     
     def test_validates_start_date_automatically(self):
         """Should validate start_date using validate_date_yyyymmdd."""
@@ -67,7 +67,7 @@ class TestSearchFilingsRequest:
         # Invalid date format should raise ValidationError
         with pytest.raises(ValidationError) as exc_info:
             SearchFilingsRequest(
-                stock_code='005930',
+                stock_codes=['005930'],
                 start_date='2024-01-01',  # Dashes not allowed
                 end_date='20241231',
                 report_types=['A001']
@@ -82,7 +82,7 @@ class TestSearchFilingsRequest:
         
         with pytest.raises(ValidationError) as exc_info:
             SearchFilingsRequest(
-                stock_code='005930',
+                stock_codes=['005930'],
                 start_date='20240101',
                 end_date='202412',  # Too short
                 report_types=['A001']
@@ -98,7 +98,7 @@ class TestSearchFilingsRequest:
         # Invalid report type should raise ValidationError
         with pytest.raises(ValidationError) as exc_info:
             SearchFilingsRequest(
-                stock_code='005930',
+                stock_codes=['005930'],
                 start_date='20240101',
                 end_date='20241231',
                 report_types=['Z999']
@@ -112,7 +112,7 @@ class TestSearchFilingsRequest:
         from dart_fss_text.models.requests import SearchFilingsRequest
         
         request = SearchFilingsRequest(
-            stock_code='005930',
+            stock_codes=['005930'],
             start_date='20240101',
             end_date='20241231',
             report_types=['A001']
@@ -125,7 +125,7 @@ class TestSearchFilingsRequest:
         from dart_fss_text.models.requests import SearchFilingsRequest
         
         request = SearchFilingsRequest(
-            stock_code='005930',
+            stock_codes=['005930'],
             start_date='20240101',
             end_date='20241231',
             report_types=['A001', 'A002', 'A003', 'B001']
@@ -140,7 +140,7 @@ class TestSearchFilingsRequest:
         # Empty list should be invalid - need at least one report type
         with pytest.raises(ValidationError) as exc_info:
             SearchFilingsRequest(
-                stock_code='005930',
+                stock_codes=['005930'],
                 start_date='20240101',
                 end_date='20241231',
                 report_types=[]
@@ -154,13 +154,13 @@ class TestSearchFilingsRequest:
         from dart_fss_text.models.requests import SearchFilingsRequest
         
         request = SearchFilingsRequest(
-            stock_code='005930',
+            stock_codes=['005930'],
             start_date='20240101',
             end_date='20241231',
             report_types=['A001']
         )
         
-        assert isinstance(request.stock_code, str)
+        assert isinstance(request.stock_codes, list)
         assert isinstance(request.start_date, str)
         assert isinstance(request.end_date, str)
         assert isinstance(request.report_types, list)
@@ -170,7 +170,7 @@ class TestSearchFilingsRequest:
         from dart_fss_text.models.requests import SearchFilingsRequest
         
         request = SearchFilingsRequest(
-            stock_code='005930',
+            stock_codes=['005930'],
             start_date='20240101',
             end_date='20241231',
             report_types=['A001']
@@ -178,14 +178,14 @@ class TestSearchFilingsRequest:
         
         # Try to modify - should fail if frozen
         with pytest.raises((ValidationError, AttributeError)):
-            request.stock_code = '000660'
+            request.stock_codes = ['000660']
     
     def test_model_can_be_serialized_to_dict(self):
         """Model should be serializable to dict for JSON/logging."""
         from dart_fss_text.models.requests import SearchFilingsRequest
         
         request = SearchFilingsRequest(
-            stock_code='005930',
+            stock_codes=['005930'],
             start_date='20240101',
             end_date='20241231',
             report_types=['A001', 'A002']
@@ -193,7 +193,7 @@ class TestSearchFilingsRequest:
         
         data = request.model_dump()
         
-        assert data['stock_code'] == '005930'
+        assert data['stock_codes'] == ['005930']
         assert data['start_date'] == '20240101'
         assert data['end_date'] == '20241231'
         assert data['report_types'] == ['A001', 'A002']
@@ -203,7 +203,7 @@ class TestSearchFilingsRequest:
         from dart_fss_text.models.requests import SearchFilingsRequest
         
         data = {
-            'stock_code': '005930',
+            'stock_codes': ['005930'],
             'start_date': '20240101',
             'end_date': '20241231',
             'report_types': ['A001']
@@ -211,7 +211,7 @@ class TestSearchFilingsRequest:
         
         request = SearchFilingsRequest(**data)
         
-        assert request.stock_code == '005930'
+        assert request.stock_codes == ['005930']
     
     def test_validation_error_messages_are_helpful(self):
         """ValidationError should contain helpful messages from validators."""
@@ -219,7 +219,7 @@ class TestSearchFilingsRequest:
         
         try:
             SearchFilingsRequest(
-                stock_code='BAD',
+                stock_codes=['BAD'],
                 start_date='20240101',
                 end_date='20241231',
                 report_types=['A001']
@@ -235,18 +235,18 @@ class TestSearchFilingsRequest:
         
         try:
             SearchFilingsRequest(
-                stock_code='BAD',  # Invalid
+                stock_codes=['BAD'],  # Invalid
                 start_date='INVALID',  # Invalid
                 end_date='20241231',
                 report_types=['Z999']  # Invalid
             )
         except ValidationError as e:
             errors = e.errors()
-            # Should have 3 errors (stock_code, start_date, report_types)
+            # Should have 3 errors (stock_codes, start_date, report_types)
             assert len(errors) >= 3
             
             error_fields = [e['loc'][0] for e in errors]
-            assert 'stock_code' in error_fields
+            assert 'stock_codes' in error_fields
             assert 'start_date' in error_fields
             assert 'report_types' in error_fields
 
@@ -259,21 +259,21 @@ class TestSearchFilingsRequestEdgeCases:
         from dart_fss_text.models.requests import SearchFilingsRequest
         
         request = SearchFilingsRequest(
-            stock_code='000660',  # SK Hynix
+            stock_codes=['000660'],  # SK Hynix
             start_date='20240101',
             end_date='20241231',
             report_types=['A001']
         )
         
-        assert request.stock_code == '000660'
-        assert len(request.stock_code) == 6
+        assert request.stock_codes == ['000660']
+        assert len(request.stock_codes[0]) == 6
     
     def test_accepts_old_dates_in_valid_range(self):
         """Should accept dates in 1980-2100 range."""
         from dart_fss_text.models.requests import SearchFilingsRequest
         
         request = SearchFilingsRequest(
-            stock_code='005930',
+            stock_codes=['005930'],
             start_date='19900101',  # Old but valid
             end_date='20991231',    # Future but valid
             report_types=['A001']
@@ -289,7 +289,7 @@ class TestSearchFilingsRequestEdgeCases:
         # Too old
         with pytest.raises(ValidationError):
             SearchFilingsRequest(
-                stock_code='005930',
+                stock_codes=['005930'],
                 start_date='19790101',
                 end_date='20241231',
                 report_types=['A001']
@@ -301,7 +301,7 @@ class TestSearchFilingsRequestEdgeCases:
         
         # Duplicates are technically valid - just pass through
         request = SearchFilingsRequest(
-            stock_code='005930',
+            stock_codes=['005930'],
             start_date='20240101',
             end_date='20241231',
             report_types=['A001', 'A001', 'A002']
@@ -315,7 +315,7 @@ class TestSearchFilingsRequestEdgeCases:
         
         with pytest.raises(ValidationError):
             SearchFilingsRequest(
-                stock_code='005930',
+                stock_codes=['005930'],
                 start_date='20240101',
                 end_date='20241231',
                 report_types=['A001', 'Z999', 'A002']  # Z999 is invalid
@@ -333,7 +333,7 @@ class TestSearchFilingsRequestDocumentation:
         schema = SearchFilingsRequest.model_json_schema()
         
         assert 'properties' in schema
-        assert 'stock_code' in schema['properties']
+        assert 'stock_codes' in schema['properties']
         assert 'start_date' in schema['properties']
         assert 'end_date' in schema['properties']
         assert 'report_types' in schema['properties']
@@ -352,7 +352,7 @@ class TestSearchFilingsRequestDocumentation:
         from dart_fss_text.models.requests import SearchFilingsRequest
         
         request = SearchFilingsRequest(
-            stock_code='005930',
+            stock_codes=['005930'],
             start_date='20240101',
             end_date='20241231',
             report_types=['A001']
@@ -361,5 +361,5 @@ class TestSearchFilingsRequestDocumentation:
         str_repr = str(request)
         
         # Should contain key information
-        assert '005930' in str_repr or 'stock_code' in str_repr
+        assert '005930' in str_repr or 'stock_codes' in str_repr
 

@@ -23,29 +23,30 @@ class SearchFilingsRequest(BaseModel):
     and provides a type-safe interface for filing search operations.
     
     Attributes:
-        stock_code: 6-digit Korean stock code (e.g., '005930' for Samsung)
+        stock_codes: List of 6-digit Korean stock codes (e.g., ['005930', '000660'])
         start_date: Start date in YYYYMMDD format (e.g., '20240101')
         end_date: End date in YYYYMMDD format (e.g., '20241231')
         report_types: List of report type codes (e.g., ['A001', 'A002'])
     
     Example:
         >>> request = SearchFilingsRequest(
-        ...     stock_code='005930',
+        ...     stock_codes=['005930'],
         ...     start_date='20240101',
         ...     end_date='20241231',
         ...     report_types=['A001', 'A002']
         ... )
-        >>> request.stock_code
-        '005930'
+        >>> request.stock_codes
+        ['005930']
     
     Raises:
         ValidationError: If any field fails validation
     """
     
-    stock_code: str = Field(
+    stock_codes: List[str] = Field(
         ...,
-        description="6-digit Korean stock code with leading zeros preserved",
-        examples=["005930", "000660"]
+        min_length=1,
+        description="List of 6-digit Korean stock codes with leading zeros preserved",
+        examples=[["005930", "000660"]]
     )
     
     start_date: str = Field(
@@ -68,7 +69,12 @@ class SearchFilingsRequest(BaseModel):
     )
     
     # Apply validators using field_validator decorator
-    _validate_stock_code = field_validator('stock_code')(validate_stock_code)
+    @field_validator('stock_codes')
+    @classmethod
+    def validate_stock_codes_list(cls, v: List[str]) -> List[str]:
+        """Validate each stock code in the list."""
+        return [validate_stock_code(code) for code in v]
+    
     _validate_start_date = field_validator('start_date')(validate_date_yyyymmdd)
     _validate_end_date = field_validator('end_date')(validate_date_yyyymmdd)
     _validate_report_types = field_validator('report_types')(validate_report_types)
@@ -78,7 +84,7 @@ class SearchFilingsRequest(BaseModel):
         frozen=True,  # Make model immutable
         json_schema_extra={
             "examples": [{
-                "stock_code": "005930",
+                "stock_codes": ["005930"],
                 "start_date": "20240101",
                 "end_date": "20241231",
                 "report_types": ["A001", "A002"]
