@@ -71,7 +71,7 @@
 
 ### Core Use Cases
 
-#### Use Case 1: Build Company List and Fetch Reports
+#### Use Case 1: Fetch and Store Reports
 
 ```python
 from dart_fss_text import DisclosurePipeline
@@ -79,11 +79,7 @@ from dart_fss_text import DisclosurePipeline
 # Initialize pipeline with MongoDB connection
 pipeline = DisclosurePipeline(mongo_uri="mongodb://localhost:27017/dart_disclosures")
 
-# Phase 0: Build company list (one-time or automatic on first run)
-pipeline.build_company_list()
-# → Loads/creates data/corp_list.csv (3,901 listed stocks)
-
-# Phase 1: Fetch reports using actual DART codes
+# Fetch reports directly - dart-fss handles company lookup automatically
 results = pipeline.fetch_reports(
     stock_codes=["005930", "000660"],  # Samsung, SK Hynix
     start_date="20230101",
@@ -92,6 +88,9 @@ results = pipeline.fetch_reports(
 )
 
 # Returns: {downloaded: 8, parsed: 8, stored: 8, failed: 0}
+
+# Note: dart-fss get_corp_list() loads once (~7s first call), 
+# then instant on all subsequent calls (Singleton pattern)
 ```
 
 #### Use Case 2: Query Stored Text
@@ -145,33 +144,21 @@ for section in sections:
 
 > **Technical Details**: For system architecture, data models, and technical design patterns, see **[architecture.md](architecture.md)**.
 
-### Phase 0: Corporation List Management (Foundation)
+### Discovery & Download Pipeline (MVP)
 
-**Before** any discovery or download operations can begin, we must establish the **stock_code → corp_code mapping**.
+**Company Lookup**: Handled automatically by dart-fss
 
-1. **Corporation List Caching**
-   - **Purpose**: Build lookup table for converting user-provided stock codes (6 digits) to DART corp codes (8 digits)
-   - **Source**: `dart_fss.get_corp_list()` returns all 114,106+ corporations from DART
-   - **Filter**: Extract only listed stocks (3,901 corporations with non-null `stock_code`)
-   - **Storage**: Save to `data/corp_list.csv` for fast startup and offline operation
-   - **Refresh Strategy**: Load from cache on startup; refresh weekly or on-demand
+- dart-fss provides `get_corp_list()` with **Singleton pattern**
+- First call: ~7s to load 114,106+ corporations  
+- Subsequent calls: **instant** (returns same cached object)
+- `find_by_stock_code()`: **instant** lookup (0.000ms)
+- **No external caching needed** - dart-fss handles it perfectly
 
-2. **Schema** (11 columns from DART API):
-   - **Always present**: corp_code, corp_name, stock_code, modify_date
-   - **Sometimes present**: corp_cls (market), sector, product (70.9% of corps)
-   - **Validation**: Verified in Experiment 5 (see [experiments.md](experiments.md#experiment-5))
-
-3. **Why This is Necessary**:
-   - Users provide stock codes (e.g., "005930" for Samsung)
-   - DART API requires corp codes (e.g., "00126380")
-   - `dart-fss` provides `find_by_stock_code()` but loads entire corp list each time (~10s)
-   - **Caching eliminates repeated API calls** and enables instant lookups
-
-**Implementation**: `CorpListManager` service (see [architecture.md](architecture.md))
+**Validated in Experiment 6**: dart-fss's built-in caching eliminates need for CSV caching layer
 
 ---
 
-### Phase 1: Discovery & Download Pipeline (MVP)
+### Filing Discovery & Filtering
 
 1. **Filing Discovery & Filtering**
    - **API Method**: `pipeline.fetch_reports(stock_codes, start_date, end_date, report_types)`
@@ -179,9 +166,8 @@ for section in sections:
      - `stock_codes` (List[str], mandatory): Company stock codes (e.g., `["005930", "000660"]`)
      - `start_date`, `end_date` (str): Date range in YYYYMMDD format (e.g., `"20240101"`, `"20241231"`)
      - `report_types` (List[str]): DART report type codes (e.g., `["A001", "A002"]`)
-   - **Prerequisite**: Corporation list must be loaded (Phase 0)
    - **Internal Process**:
-     - Use `CorpListManager` to convert stock_codes → corp_codes
+     - Use `dart.get_corp_list().find_by_stock_code()` to convert stock_codes → corp_codes
      - Leverage dart-fss for filing search with `pblntf_detail_ty` parameter
      - Search filings that match all filters
 
@@ -200,10 +186,10 @@ for section in sections:
    ```
    
 3. **Additional Helper Methods**
-   - `get_company_info(stock_code)`: Retrieve company names and metadata from corp_list
+   - `get_company_info(stock_code)`: Retrieve company metadata via `dart.get_corp_list().find_by_stock_code()`
    - `preview_filings(filters)`: Show matching filings before download (with metadata)
 
-3. **Metadata Management (PIT-Critical)**
+4. **Metadata Management (PIT-Critical)**
    - Track **published_date** (original disclosure date)
    - Track **amended_date** (if document was corrected/updated)
    - Track **download_timestamp** (when we retrieved it)
@@ -211,7 +197,7 @@ for section in sections:
    - Store **stock_code**, **company_name**
    - This ensures point-in-time (PIT) integrity for backtesting and research
 
-4. **Document Download & Storage**
+5. **Document Download & Storage**
    - Use `dart_fss.api.filings.download_document()` for retrieval
    - Automatic unzipping and XML extraction
    - Store raw XML in local filesystem with PIT-aware directory structure:
@@ -227,64 +213,64 @@ for section in sections:
    - **Rationale**: Using `rcept_dt` year ensures PIT correctness. A 2022 FY report published in March 2023 (rcept_dt=20230307) should be in `2023/` folder, as that's when it became publicly available.
    - Track download status in metadata database
 
-### Phase 2: XML Parsing & Structuring
+### XML Parsing & Structuring
 
-5. **Section Identification**
+6. **Section Identification**
    - Detect major sections using `USERMARK` attributes (e.g., `USERMARK="F-14 B"`)
    - Map USERMARK patterns to semantic section names
    - Handle variations in formatting across different filing types
 
-6. **Text Extraction**
+7. **Text Extraction**
    - Clean text extraction from `<P>`, `<SPAN>`, and other text elements
    - Preserve paragraph boundaries and semantic structure
    - Handle special characters and encoding issues
 
-7. **Table Parsing**
+8. **Table Parsing**
    - Extract tables (`<TABLE>`) with headers and data rows
    - Convert to structured dict (ready for MongoDB)
    - Maintain relationships between tables and their surrounding context
 
-### Phase 3: Database Layer
+### Database Layer
 
-8. **MongoDB Schema Design**
+9. **MongoDB Schema Design**
    - **Collections**:
      - `filings_metadata`: Tracks all downloaded filings (PIT metadata)
      - `document_sections`: Stores parsed sections with text and tables
      - `embeddings`: Stores vector embeddings for semantic search (optional)
 
-9. **CRUD Operations**
+10. **CRUD Operations**
    - Insert parsed documents with full metadata
    - Query by stock_code, date range, section name
    - **PIT queries**: Filter by `as_of_date` to ensure temporal correctness
    - Update embeddings without re-parsing documents
 
-10. **Data Versioning**
+11. **Data Versioning**
     - Handle amended filings by storing multiple versions
     - Track parsing pipeline version (for reproducibility)
 
-### Phase 4: Advanced Parsing
+### Advanced Parsing
 
-11. **Subsection Parsing**
+12. **Subsection Parsing**
     - Identify hierarchical structure (e.g., DX 부문, DS 부문 within 주요 사업의 내용)
     - Create nested data structures reflecting document organization
 
-12. **Cross-Reference Resolution**
+13. **Cross-Reference Resolution**
     - Parse references like "Ⅱ. 사업의 내용"
     - Link related sections
 
-### Phase 5: Analytics & NLP
+### Analytics & NLP
 
-13. **Time-Series Analysis**
+14. **Time-Series Analysis**
     - Compare sections across multiple filings
     - Track changes over time (diff functionality)
     - Visualize disclosure evolution
 
-14. **NLP Preprocessing Pipeline**
+15. **NLP Preprocessing Pipeline**
     - Tokenization optimized for Korean financial text
     - Named entity recognition (company names, products, financial terms)
     - Sentence boundary detection
 
-15. **Embedding & Semantic Search**
+16. **Embedding & Semantic Search**
     - Generate embeddings for all sections
     - Store in MongoDB with vector search support
     - Semantic similarity queries across companies/time
@@ -388,10 +374,9 @@ For detailed technical dependencies, module structure, and system architecture, 
 **Features**:
 
 - [ ] `DisclosurePipeline` class:
-  - **Phase 0**: `build_company_list(force_refresh=False)`: Build/load corp_list.csv
-  - **Phase 1**: `fetch_reports(stock_codes, start_date, end_date, report_types)`: Search and download
+  - `fetch_reports(stock_codes, start_date, end_date, report_types)`: Search and download
   - `preview_filings(stock_codes, start_date, end_date, report_types)`: Show metadata before download
-  - `get_company_info(stock_code)`: Retrieve company metadata from corp_list
+  - `get_company_info(stock_code)`: Retrieve company metadata via dart-fss
 
 **Tests**:
 
