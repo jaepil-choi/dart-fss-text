@@ -109,70 +109,6 @@ if stock_code == "005930" and report_type == "annual":
 
 ## Development Workflow
 
-### Pipeline Initialization Workflow
-
-**Before any discovery/download operations**, the corporation list cache must be initialized:
-
-```
-┌──────────────────────┐
-│ Pipeline Starts      │
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│ Check corp_list.csv  │
-│ exists?              │
-└──────────┬───────────┘
-           │
-     ┌─────┴─────┐
-     │           │
-    Yes          No
-     │           │
-     │           ▼
-     │  ┌──────────────────────┐
-     │  │ Call DART API        │
-     │  │ dart.get_corp_list() │
-     │  │ (~10 seconds)        │
-     │  └──────────┬───────────┘
-     │             │
-     │             ▼
-     │  ┌──────────────────────┐
-     │  │ Filter listed stocks │
-     │  │ (stock_code != null) │
-     │  └──────────┬───────────┘
-     │             │
-     │             ▼
-     │  ┌──────────────────────┐
-     │  │ Save to CSV          │
-     │  │ (3,901 rows)         │
-     │  └──────────┬───────────┘
-     │             │
-     └─────────────┘
-           │
-           ▼
-┌──────────────────────┐
-│ Load CSV to memory   │
-│ Build lookup dict    │
-│ (~100ms)             │
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│ Ready for Discovery  │
-│ stock_code -> corp   │
-└──────────────────────┘
-```
-
-**Rationale** (validated in Experiment 5):
-- **Performance**: CSV load (100ms) vs API call (10s) = 100x faster
-- **Reliability**: Offline operation when DART API is slow/unavailable
-- **Data Quality**: All 3,901 listed stocks successfully cached with 0 duplicates
-- **Completeness**: 70.9% have full metadata (sector, product, corp_cls)
-
-**See**: [experiments.md Phase 2](experiments.md#phase-2-corporation-list-mapping) and [FINDINGS.md](FINDINGS.md#phase-2-corporation-list-mapping)
-
----
-
 ### Standard Feature Development Process
 
 ```
@@ -827,9 +763,10 @@ class DisclosurePipeline:
         report_types: List[str]
     ) -> Dict[str, int]:
         """
-        Phase 1: Search, download, parse, and store filings.
+        Search, download, parse, and store filings.
         
-        Prerequisite: Phase 0 (corp_list) must be loaded.
+        Note: dart-fss get_corp_list() uses Singleton pattern - first call
+        takes ~7s, all subsequent calls are instant (0.000ms).
         """
         # Validation happens automatically via Pydantic
         request = FetchReportsRequest(
@@ -840,8 +777,12 @@ class DisclosurePipeline:
         )
         
         # Now guaranteed all inputs are valid!
-        # Convert stock codes to corp codes using Phase 0 cache
-        corp_codes = [self._corp_manager.get_corp_code(sc) for sc in stock_codes]
+        # Convert stock codes to corp codes using dart-fss directly
+        corp_list = dart.get_corp_list()  # Singleton - instant after first call
+        corp_codes = []
+        for stock_code in stock_codes:
+            corp = corp_list.find_by_stock_code(stock_code)
+            corp_codes.append(corp.corp_code)
         
         # Proceed with dart-fss API calls...
 ```
