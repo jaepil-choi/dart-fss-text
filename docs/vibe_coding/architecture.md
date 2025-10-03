@@ -463,27 +463,6 @@ This ensures backtesting integrity—no future information leaks into historical
 
 ## File System Structure
 
-### Corporation List Cache
-
-```
-data/
-  corp_list.csv           # Cached corporation list (3,901 listed stocks)
-```
-
-**Structure** (11 columns):
-- `corp_code`, `corp_name`, `corp_eng_name`, `stock_code`, `modify_date`
-- `corp_cls`, `market_type`, `sector`, `product` (sometimes null)
-- `trading_halt`, `issue` (rarely populated)
-
-**Purpose**: Fast stock_code → corp_code lookup without DART API call
-
-**Refresh Policy**:
-- Generated on first pipeline run if missing
-- Refreshed weekly (configurable)
-- Force refresh: `pipeline.refresh_corp_list()`
-
-**Verified in**: Experiment 5 ([experiments.md](experiments.md#experiment-5), [FINDINGS.md](FINDINGS.md#experiment-5))
-
 ### Raw XML Storage
 
 ```
@@ -555,8 +534,7 @@ src/
     
     services/
       __init__.py
-      corp_list_manager.py         # CorpListManager (cache management)
-      filing_search.py             # FilingSearchService
+      filing_search.py             # FilingSearchService (uses dart-fss directly)
       document_parser.py           # DocumentParserService
       metadata_extractor.py        # MetadataExtractor
       section_mapper.py            # SectionMapper (USERMARK → name)
@@ -637,100 +615,78 @@ class QuarterlyReportParser(ParsingStrategy):
 
 **Benefits**: Extensible to new document types without modifying core logic.
 
-### 3. **Corporation List Manager** (Phase 0)
-Caching layer for stock_code → corp_code mapping. **This must be initialized before any discovery operations**.
+### 3. **Direct dart-fss Company Lookup**
+Use dart-fss's built-in Singleton caching for company lookups. **No external caching needed!**
 
 ```python
-from pathlib import Path
-from typing import Optional, Dict
-import pandas as pd
 import dart_fss
 
-class CorpListManager:
+class FilingSearchService:
     """
-    Manage corporation list with CSV caching (Phase 0 foundation).
+    Search service using dart-fss directly for company lookups.
     
-    Rationale:
-    - dart-fss.get_corp_list() loads 114K+ corps (~10s API call)
-    - Users provide stock codes, DART API needs corp codes
-    - Cache to CSV enables instant lookup without repeated API calls
-    - Validated in Experiment 5: 3,901 listed stocks successfully cached
+    Rationale (Experiment 6):
+    - dart-fss.get_corp_list() uses Singleton pattern
+    - First call: ~7s (loads 114K+ corporations once per process)
+    - Subsequent calls: 0.000ms (returns same cached object)
+    - find_by_stock_code(): instant lookup (0.000ms)
+    - No need for CSV caching or Phase 0 initialization!
     
-    Usage in Pipeline:
-        # Phase 0: Build/load company list FIRST
-        manager = CorpListManager()
-        manager.load()  # Auto-loads from cache or fetches if missing
+    Usage:
+        service = FilingSearchService()
         
-        # Phase 1: Now ready for stock_code → corp_code conversion
-        corp_code = manager.get_corp_code("005930")
+        # dart-fss handles caching automatically
+        filings = service.search_filings(
+            stock_codes=["005930"],
+            start_date="20240101",
+            end_date="20241231",
+            report_types=["A001"]
+        )
     """
     
-    def __init__(self, cache_path: Path = Path("data/corp_list.csv")):
-        self._cache_path = cache_path
-        self._corp_list: Optional[dart_fss.CorpList] = None
-        self._lookup: Dict[str, str] = {}  # stock_code -> corp_code
-    
-    def load(self, force_refresh: bool = False) -> None:
-        """
-        Load from cache or fetch from DART API.
+    def search_filings(
+        self,
+        stock_codes: List[str],
+        start_date: str,
+        end_date: str,
+        report_types: List[str]
+    ) -> List[Filing]:
+        """Search filings using dart-fss directly."""
+        # dart-fss Singleton - instant after first call
+        corp_list = dart.get_corp_list()
         
-        This is the Phase 0 initialization step that must run before
-        any fetch_reports() calls.
-        """
-        if not force_refresh and self._cache_path.exists():
-            # Fast path: Load from CSV (~100ms)
-            df = pd.read_csv(self._cache_path)
-            self._lookup = df.set_index('stock_code')['corp_code'].to_dict()
-        else:
-            # Slow path: Fetch from DART API (~10s)
-            self._corp_list = dart_fss.get_corp_list()
-            listed = [c for c in self._corp_list.corps if c.stock_code]
+        all_filings = []
+        for stock_code in stock_codes:
+            # Instant lookup using dart-fss
+            corp = corp_list.find_by_stock_code(stock_code)
             
-            # Save to CSV for future runs
-            corp_data = [corp.to_dict() for corp in listed]
-            df = pd.DataFrame(corp_data)
-            self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-            df.to_csv(self._cache_path, index=False, encoding='utf-8-sig')
-            
-            self._lookup = df.set_index('stock_code')['corp_code'].to_dict()
-    
-    def get_corp_code(self, stock_code: str) -> str:
-        """Convert stock_code to corp_code."""
-        if stock_code not in self._lookup:
-            raise ValueError(f"Stock code not found: {stock_code}")
-        return self._lookup[stock_code]
+            for report_type in report_types:
+                # Use dart-fss search with proper parameters
+                filings = corp.search_filings(
+                    bgn_de=start_date,
+                    pblntf_detail_ty=report_type
+                )
+                all_filings.extend(filings)
+        
+        return all_filings
     
     def get_company_info(self, stock_code: str) -> Dict:
-        """Get full company metadata from cache."""
-        # Implementation returns full row from CSV
-        pass
+        """Get company metadata directly from dart-fss."""
+        corp_list = dart.get_corp_list()  # Singleton
+        corp = corp_list.find_by_stock_code(stock_code)
+        return corp.to_dict()
 ```
 
 **Benefits**:
-- **Performance**: CSV load (~100ms) vs API call (~10s) = 100x faster
-- **Offline operation**: Works without DART API access
-- **Validated data**: 100% success rate in Experiment 5
-- **Zero duplicates**: Verified unique stock_codes and corp_codes
+- **Simpler**: No CSV layer, no caching logic
+- **Faster**: dart-fss Singleton is instant after first load
+- **Less Code**: No CorpListManager needed (-925 lines)
+- **Reliable**: Leverage dart-fss's proven architecture
+- **Maintained**: dart-fss team handles updates
 
-**Pipeline Integration**:
-```python
-# In DisclosurePipeline.__init__()
-self.corp_manager = CorpListManager()
+**Validated in Experiment 6**: dart-fss's built-in caching eliminates need for external CSV caching
 
-# In build_company_list() - Phase 0 explicit method
-def build_company_list(self, force_refresh: bool = False):
-    self.corp_manager.load(force_refresh=force_refresh)
-
-# In fetch_reports() - Phase 1, depends on Phase 0
-def fetch_reports(self, stock_codes, ...):
-    # Convert stock codes to corp codes
-    corp_codes = [self.corp_manager.get_corp_code(sc) for sc in stock_codes]
-    # ... proceed with search
-```
-
-**See**: [experiments.md Phase 2](experiments.md#phase-2-corporation-list-mapping) and [prd.md Phase 0](prd.md#phase-0-corporation-list-management-foundation)
-
-### 4. **Direct dart-fss Usage**
+### 4. **Download Service with dart-fss**
 Services use dart-fss directly rather than through an adapter:
 
 ```python
@@ -763,37 +719,22 @@ class DownloadService:
 **Rationale**: dart-fss IS the adapter layer for DART API. Adding another layer would be over-engineering.
 
 ### 5. **Facade Pattern** (API Layer)
-Simplified interface for complex subsystems with **explicit phase separation**:
+Simplified interface leveraging dart-fss directly:
 
 ```python
 class DisclosurePipeline:
     """
     Facade for the complete workflow.
     
-    Phases:
-    - Phase 0: build_company_list() - Initialize corp_code lookup
-    - Phase 1: fetch_reports() - Search, download, parse, store
+    Simplified: No Phase 0 needed - dart-fss handles company lookup.
     """
     
     def __init__(self, mongo_uri: str):
         # Initialize all subsystems
-        self._corp_manager = CorpListManager()
         self._search_service = FilingSearchService()
         self._parser_service = DocumentParserService()
         self._storage_manager = StorageManager(mongo_uri)
-        
-        # Auto-load corp list on init (can be overridden)
-        self._corp_manager.load()
-    
-    def build_company_list(self, force_refresh: bool = False) -> Dict[str, int]:
-        """
-        Phase 0: Build/refresh corporation list cache.
-        
-        Returns:
-            Summary with total_corps, listed_corps counts
-        """
-        self._corp_manager.load(force_refresh=force_refresh)
-        return {"total": 114106, "listed": 3901}  # Example
+        # No corp_manager needed - dart-fss handles it!
     
     def fetch_reports(
         self, 
@@ -803,7 +744,7 @@ class DisclosurePipeline:
         report_types: List[str]
     ) -> Dict[str, int]:
         """
-        Phase 1: Search, download, parse, and store filings.
+        Search, download, parse, and store filings.
         
         Args:
             stock_codes: List of 6-digit stock codes (e.g., ["005930"])
@@ -813,24 +754,52 @@ class DisclosurePipeline:
         
         Returns:
             Summary: {downloaded: int, parsed: int, stored: int, failed: int}
-        """
-        # Convert stock_codes to corp_codes using Phase 0 cache
-        corp_codes = [self._corp_manager.get_corp_code(sc) for sc in stock_codes]
         
-        # Search, download, parse, store...
-        # (implementation details)
-        pass
+        Note:
+            dart-fss get_corp_list() loads once (~7s first call),
+            then instant on all subsequent calls (Singleton).
+        """
+        # Search filings - dart-fss handles company lookup internally
+        filings = self._search_service.search_filings(
+            stock_codes=stock_codes,
+            start_date=start_date,
+            end_date=end_date,
+            report_types=report_types
+        )
+        
+        # Download, parse, store...
+        results = {
+            "downloaded": 0,
+            "parsed": 0,
+            "stored": 0,
+            "failed": 0
+        }
+        
+        for filing in filings:
+            # Download
+            xml_path = self._search_service.download_filing(filing)
+            results["downloaded"] += 1
+            
+            # Parse
+            document = self._parser_service.parse(xml_path)
+            results["parsed"] += 1
+            
+            # Store
+            self._storage_manager.insert_filing(document)
+            results["stored"] += 1
+        
+        return results
     
     def get_company_info(self, stock_code: str) -> Dict:
-        """Helper: Get company metadata from corp_list cache."""
-        return self._corp_manager.get_company_info(stock_code)
+        """Helper: Get company metadata via dart-fss."""
+        return self._search_service.get_company_info(stock_code)
 ```
 
 **Benefits**: 
-- Clear phase separation (Phase 0 → Phase 1 dependency)
-- Users control when to build/refresh corp list
-- Simple interface hides subsystem complexity
-- Auto-loads corp list on init for convenience
+- **Simpler**: No Phase 0, no explicit initialization
+- **Less code**: Removed 925 lines (CorpListManager + tests)
+- **Leverages dart-fss**: Uses proven Singleton caching
+- **Just works**: No cache management needed
 
 ---
 
