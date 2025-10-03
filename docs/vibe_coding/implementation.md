@@ -1,5 +1,34 @@
 # Implementation Guide: dart-fss-text
 
+## Current Implementation Status
+
+### Phase 1: Filing Discovery ✅ (Complete - v0.1.0)
+
+**Components Implemented:**
+- ✅ Configuration Layer (`config.py`, `types.yaml`)
+- ✅ Validation Layer (`validators.py`)
+- ✅ Model Layer (`models/requests.py` with `SearchFilingsRequest`)
+- ✅ Discovery Layer (`types.py` with helper classes)
+- ✅ Service Layer (`services/filing_search.py` with `FilingSearchService`)
+
+**Test Suite:**
+- 115 unit tests (100% passing)
+- 10 integration tests (100% passing, requires API key)
+- 3 smoke tests (pytest markers, disabled by default with `-m "not smoke"`)
+- Total: 128 tests, ~14s execution time
+
+**Key Experiments:**
+- ✅ `exp_08_corplist_test.py` - Documents dart-fss Singleton behavior
+  - Validates ~7s initial load, instant subsequent calls
+  - Confirms 114,147 total companies, 3,901 listed
+
+**Next Steps:**
+- Begin Phase 2: Document Download implementation
+- Create `services/download_service.py`
+- Design PIT-aware filesystem caching strategy
+
+---
+
 ## Development Methodology
 
 ### Core Principles
@@ -722,25 +751,31 @@ def validate_date_yyyymmdd(date: str) -> str:
 from pydantic import BaseModel, field_validator
 from typing import List
 
-class FetchReportsRequest(BaseModel):
+class SearchFilingsRequest(BaseModel):
     """
-    Request model for Phase 1: fetch_reports() validation.
+    Request model for Phase 1: search_filings() validation.
     All fields are automatically validated against types.yaml.
+    
+    Status: ✅ Implemented and tested (v0.1.0)
     """
-    stock_codes: List[str]  # Multiple stock codes
+    stock_codes: List[str]  # Multiple stock codes for batch operations
     start_date: str
     end_date: str
     report_types: List[str]
     
     # Apply validators using field_validator decorator
-    _validate_stock_codes = field_validator('stock_codes')(
-        lambda codes: [validate_stock_code(c) for c in codes]
-    )
+    @field_validator('stock_codes')
+    @classmethod
+    def validate_stock_codes_list(cls, v: List[str]) -> List[str]:
+        """Validate each stock code in the list."""
+        return [validate_stock_code(code) for code in v]
+    
     _validate_start_date = field_validator('start_date')(validate_date_yyyymmdd)
     _validate_end_date = field_validator('end_date')(validate_date_yyyymmdd)
     _validate_report_types = field_validator('report_types')(validate_report_types)
     
     model_config = {
+        "frozen": True,  # Immutable model
         "json_schema_extra": {
             "examples": [{
                 "stock_codes": ["005930", "000660"],
@@ -767,9 +802,11 @@ class DisclosurePipeline:
         
         Note: dart-fss get_corp_list() uses Singleton pattern - first call
         takes ~7s, all subsequent calls are instant (0.000ms).
+        
+        Status: Search phase implemented (v0.1.0), download/parse/store pending.
         """
         # Validation happens automatically via Pydantic
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=stock_codes,
             start_date=start_date,
             end_date=end_date,
@@ -777,14 +814,11 @@ class DisclosurePipeline:
         )
         
         # Now guaranteed all inputs are valid!
-        # Convert stock codes to corp codes using dart-fss directly
-        corp_list = dart.get_corp_list()  # Singleton - instant after first call
-        corp_codes = []
-        for stock_code in stock_codes:
-            corp = corp_list.find_by_stock_code(stock_code)
-            corp_codes.append(corp.corp_code)
+        # FilingSearchService handles stock→corp conversion internally
+        search_service = FilingSearchService()
+        filings = search_service.search_filings(request)
         
-        # Proceed with dart-fss API calls...
+        # Proceed with download, parse, store (TODO: Phase 2-4)...
 ```
 
 ---
@@ -1131,7 +1165,7 @@ jobs:
 
 ---
 
-**Last Updated**: 2025-10-02  
-**Version**: 1.0  
-**Status**: Draft
+**Last Updated**: 2025-10-03  
+**Version**: 1.1  
+**Status**: Active Development (Phase 1 Complete)
 

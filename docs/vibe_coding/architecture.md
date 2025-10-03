@@ -1060,6 +1060,98 @@ CMD ["python", "-m", "dart_fss_text.cli"]
 
 ---
 
+## Implementation Status
+
+### Phase 1: Filing Discovery ✅ (Complete - v0.1.0)
+
+**Completed Components:**
+- ✅ Configuration Layer
+  - `config.py` - Pydantic Settings with YAML auto-loading
+  - `types.yaml` - Specification for all DART codes
+  - Lazy-loaded singleton pattern
+  
+- ✅ Validation Layer  
+  - `validators.py` - Reusable field validators
+  - `validate_stock_code()` - 6-digit format validation
+  - `validate_date_yyyymmdd()` - Date format validation
+  - `validate_report_types()` - Spec-based validation
+  
+- ✅ Model Layer
+  - `models/requests.py` - `SearchFilingsRequest` with automatic validation
+  - Frozen/immutable models
+  - Helpful validation error messages
+  
+- ✅ Discovery Layer
+  - `types.py` - Helper classes (ReportTypes, CorpClass, RemarkCodes)
+  - User-facing discovery API
+  
+- ✅ Service Layer
+  - `services/filing_search.py` - `FilingSearchService`
+  - Direct dart-fss integration (no wrapper)
+  - Batch search for multiple companies and report types
+  - Leverages dart-fss Singleton pattern (114K corps in ~7s, instant thereafter)
+
+**Test Coverage:**
+- 115 unit tests (100% passing)
+- 10 integration tests (100% passing)
+- 3 smoke tests (pytest markers, disabled by default)
+- Total: 128 tests, ~14s execution time
+
+**Experiments:**
+- ✅ exp_08_corplist_test.py - Documents dart-fss behavior
+  - Validates Singleton caching
+  - Confirms 114,147 total companies, 3,901 listed
+  - Proves instant lookups after initial load
+
+### Phase 2: Document Download (Next)
+
+**Planned Components:**
+- ⏳ `services/download_service.py` - Document download orchestration
+- ⏳ `storage/filesystem_cache.py` - PIT-aware file organization
+- ⏳ Experiment 09 - Download workflow validation
+
+**Target Architecture:**
+```python
+# data/raw/{year}/{corp_code}/{rcept_no}.xml
+# Year from rcept_dt (publication date) for PIT correctness
+```
+
+### Phase 3: Document Parsing (Pending)
+
+**Planned Components:**
+- ⏳ `services/document_parser.py` - DocumentParserService
+- ⏳ `parsers/xml_parser.py` - Low-level XML parsing
+- ⏳ `parsers/section_parser.py` - Section extraction
+- ⏳ `parsers/table_parser.py` - Table parsing
+- ⏳ `services/section_mapper.py` - USERMARK → semantic name mapping
+
+### Phase 4: MongoDB Storage (Pending)
+
+**Planned Components:**
+- ⏳ `storage/storage_manager.py` - CRUD operations
+- ⏳ `integrations/mongodb_client.py` - Connection management
+- ⏳ Schema creation and indexing scripts
+
+### Phase 5: API Layer (Pending)
+
+**Planned Components:**
+- ⏳ `api/pipeline.py` - DisclosurePipeline orchestrator
+- ⏳ `api/query.py` - TextQuery interface
+- ⏳ End-to-end pipeline integration
+
+### Development Metrics (as of 2025-10-03)
+
+| Metric | Value |
+|--------|-------|
+| Total Tests | 128 (125 run by default) |
+| Test Pass Rate | 100% |
+| Code Coverage | ~95% (Phase 1 only) |
+| Phases Complete | 1/5 |
+| Lines of Code | ~2,500 |
+| API Calls Used | 59/20,000 daily quota |
+
+---
+
 ## References & Standards
 
 - **DART OPEN API Specification**: https://opendart.fss.or.kr/guide/main.do
@@ -1069,7 +1161,7 @@ CMD ["python", "-m", "dart_fss_text.cli"]
 
 ---
 
-**Last Updated**: 2025-10-02  
-**Version**: 1.0  
-**Status**: Draft
+**Last Updated**: 2025-10-03  
+**Version**: 1.1  
+**Status**: Active Development (Phase 1 Complete)
 
