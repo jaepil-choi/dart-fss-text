@@ -71,7 +71,7 @@
 
 ### Core Use Cases
 
-#### Use Case 1: Download and Store Disclosures
+#### Use Case 1: Build Company List and Fetch Reports
 
 ```python
 from dart_fss_text import DisclosurePipeline
@@ -79,15 +79,19 @@ from dart_fss_text import DisclosurePipeline
 # Initialize pipeline with MongoDB connection
 pipeline = DisclosurePipeline(mongo_uri="mongodb://localhost:27017/dart_disclosures")
 
-# Define search filters
-pipeline.fetch_and_store(
+# Phase 0: Build company list (one-time or automatic on first run)
+pipeline.build_company_list()
+# → Loads/creates data/corp_list.csv (3,901 listed stocks)
+
+# Phase 1: Fetch reports using actual DART codes
+results = pipeline.fetch_reports(
     stock_codes=["005930", "000660"],  # Samsung, SK Hynix
-    start_date="2023-01-01",
-    end_date="2024-12-31",
-    report_types=["annual", "half"],   # Annual and semi-annual reports
+    start_date="20230101",
+    end_date="20241231",
+    report_types=["A001", "A002"],  # A001=Annual, A002=Semi-Annual
 )
 
-# Returns summary: {downloaded: 8, parsed: 8, stored: 8, failed: 0}
+# Returns: {downloaded: 8, parsed: 8, stored: 8, failed: 0}
 ```
 
 #### Use Case 2: Query Stored Text
@@ -170,19 +174,34 @@ for section in sections:
 ### Phase 1: Discovery & Download Pipeline (MVP)
 
 1. **Filing Discovery & Filtering**
+   - **API Method**: `pipeline.fetch_reports(stock_codes, start_date, end_date, report_types)`
    - **Input Parameters**:
-     - `stock_codes` (List[str], mandatory): Company stock codes (e.g., ["005930", "000660"])
-     - `start_date`, `end_date` (str): Date range for filing search
-     - `report_types` (List[str]): Which reports to fetch (see Report Types catalog below)
+     - `stock_codes` (List[str], mandatory): Company stock codes (e.g., `["005930", "000660"]`)
+     - `start_date`, `end_date` (str): Date range in YYYYMMDD format (e.g., `"20240101"`, `"20241231"`)
+     - `report_types` (List[str]): DART report type codes (e.g., `["A001", "A002"]`)
    - **Prerequisite**: Corporation list must be loaded (Phase 0)
-   - Use `CorpListManager` to convert stock_codes → corp_codes
-   - Leverage dart-fss for filing search with proper `pblntf_detail_ty` parameter
-   - Search filings that match all filters
+   - **Internal Process**:
+     - Use `CorpListManager` to convert stock_codes → corp_codes
+     - Leverage dart-fss for filing search with `pblntf_detail_ty` parameter
+     - Search filings that match all filters
 
-2. **Catalog & Discovery APIs**
-   - `list_available_report_types()`: Show all supported report types
+2. **Discovering Available Report Types**
+   - Users discover valid codes via existing `ReportTypes` helper class:
+   ```python
+   from dart_fss_text import ReportTypes
+   
+   # List all available types
+   ReportTypes.list_available()
+   # → {'A001': '사업보고서', 'A002': '반기보고서', ...}
+   
+   # Get only periodic reports
+   ReportTypes.list_periodic()
+   # → {'A001': '사업보고서', 'A002': '반기보고서', 'A003': '분기보고서'}
+   ```
+   
+3. **Additional Helper Methods**
+   - `get_company_info(stock_code)`: Retrieve company names and metadata from corp_list
    - `preview_filings(filters)`: Show matching filings before download (with metadata)
-   - `get_company_info(stock_code)`: Retrieve company names and metadata
 
 3. **Metadata Management (PIT-Critical)**
    - Track **published_date** (original disclosure date)
@@ -286,27 +305,33 @@ for section in sections:
 
 ## DART Report Types Catalog
 
-Based on the DART OPEN API specifications, the following report types are available:
+Based on the DART OPEN API specifications, the following report types are available.
 
-| Report Type Code | Korean Name | English Description | Frequency |
-|-----------------|-------------|---------------------|-----------|
+**Complete Specification**: See `config/types.yaml` for all 60+ report type codes.
+
+**Commonly Used Codes** (Periodic Reports):
+
+| Code | Korean Name | English Description | Frequency |
+|------|-------------|---------------------|-----------|
 | `A001` | 사업보고서 | Annual Report | Annual |
 | `A002` | 반기보고서 | Semi-Annual Report | Half-yearly |
 | `A003` | 분기보고서 | Quarterly Report | Quarterly |
-| `A004` | 등기변경서 | Registration Change | Ad-hoc |
-| `A005` | 증권발행실적보고서 | Securities Issuance Report | Ad-hoc |
-| `B001` | 주요사항보고서 | Material Event Report | Ad-hoc |
-| `B002` | 주식등의대량보유상황보고서 | Large Shareholding Report | Ad-hoc |
-| `C001` | 자산유동화계획서 | Asset Securitization Plan | Ad-hoc |
-| `D001` | 합병등종료보고서 | M&A Completion Report | Ad-hoc |
 
-**Phase 1 Focus**: We'll initially support periodic reports (A001, A002, A003) as they contain the richest textual narratives.
+**Additional Categories** (examples):
+- **A-series**: Periodic disclosures (A001-A005)
+- **B-series**: Material events (B001-B003)
+- **C-series**: Securities issuance (C001-C011)
+- **D-series**: Shareholding disclosures (D001-D004)
+- **E-F-G-H-I-J series**: Other disclosure types
 
-**User-Friendly Aliases**:
+**Discovery**: Use `ReportTypes.list_available()` to see all codes programmatically.
 
-- `"annual"` → A001
-- `"half"` → A002
-- `"quarterly"` or `"quarter"` → A003
+**Phase 1 Focus**: We'll initially support periodic reports (`A001`, `A002`, `A003`) as they contain the richest textual narratives.
+
+**Parameter Usage**: Pass actual DART codes directly to `fetch_reports()`:
+```python
+report_types=["A001", "A002", "A003"]  # Use codes as-is
+```
 
 ---
 
@@ -362,11 +387,11 @@ For detailed technical dependencies, module structure, and system architecture, 
 
 **Features**:
 
-- [ ] `DiscoveryAPI` class:
-  - `list_available_report_types()`: Catalog of report types
-  - `search_filings(stock_codes, date_range, report_types)`: Search with filters
-  - `preview_filings(filters)`: Show metadata before download
-  - `download_filings(filters, save_path)`: Bulk download with progress tracking
+- [ ] `DisclosurePipeline` class:
+  - **Phase 0**: `build_company_list(force_refresh=False)`: Build/load corp_list.csv
+  - **Phase 1**: `fetch_reports(stock_codes, start_date, end_date, report_types)`: Search and download
+  - `preview_filings(stock_codes, start_date, end_date, report_types)`: Show metadata before download
+  - `get_company_info(stock_code)`: Retrieve company metadata from corp_list
 
 **Tests**:
 
@@ -484,6 +509,39 @@ For detailed technical dependencies, module structure, and system architecture, 
 - [ ] Semantic search capabilities
 - [ ] Change detection across filings
 - [ ] Example notebooks for common NLP tasks
+
+---
+
+### Milestone 8: Self-Documenting API (Future)
+
+**Goal**: Make API fully discoverable without reading docs
+
+**Proposed Pattern** (not in MVP):
+```python
+# Future: Discoverable API
+import dart_fss_text as dft
+
+# Discover what parameters are valid
+dft.fetch_reports.get_available_params()
+# → Returns detailed info about report_types, stock_codes, dates
+
+# Execute with discovered params
+dft.fetch_reports(stock_codes=['005930'], ...)
+```
+
+**Implementation Approach**:
+- Callable Descriptor pattern with `yaml_keys` declaration
+- Base class `DiscoverableAPI` with automatic param generation
+- Methods declare which `types.yaml` keys they use
+- `.get_available_params()` auto-generates from declaration
+
+**Benefits**:
+- Self-documenting: API tells you what's valid
+- Context-aware: Each method shows only its relevant params
+- Type-safe: Still uses Pydantic validation
+- Generalizable: Easy pattern for all methods needing types.yaml
+
+**Status**: Design documented, deferred to post-MVP
 
 ---
 
