@@ -7,5 +7,9 @@ This module contains service classes that implement core business logic:
 - MetadataExtractor: Extract PIT-critical metadata
 """
 
-__all__ = []
+from dart_fss_text.services.filing_search import FilingSearchService
+
+__all__ = [
+    'FilingSearchService',
+]
 

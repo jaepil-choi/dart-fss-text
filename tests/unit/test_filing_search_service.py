@@ -3,6 +3,11 @@ Unit tests for Filing Search Service
 
 Tests the search service that wraps dart-fss API calls for filing discovery.
 Based on findings from Experiment 7 (exp_07_search_download_organize.py).
+
+IMPORTANT: These are UNIT tests - they mock all external dependencies.
+- All dart.get_corp_list() calls are mocked via autouse fixture
+- No live API calls should occur
+- For integration tests with live API, see test_filing_search_integration.py
 """
 
 import pytest
@@ -10,7 +15,30 @@ from unittest.mock import Mock, MagicMock, patch
 from datetime import datetime
 
 from dart_fss_text.services.filing_search import FilingSearchService
-from dart_fss_text.models.requests import FetchReportsRequest
+from dart_fss_text.models.requests import SearchFilingsRequest
+
+
+@pytest.fixture(autouse=True)
+def mock_dart_get_corp_list():
+    """
+    Auto-mock dart.get_corp_list() for ALL tests in this file.
+    
+    This prevents unit tests from making live API calls that:
+    - Take 7+ seconds on first call
+    - Require valid API key
+    - Load 114K companies unnecessarily
+    
+    Each test can override this mock if needed by adding its own
+    @patch decorator.
+    """
+    with patch('dart_fss_text.services.filing_search.dart.get_corp_list') as mock:
+        # Setup a basic mock that returns a usable corp_list
+        mock_corp_list = Mock()
+        mock_corp = Mock()
+        mock_corp.search_filings = Mock(return_value=[])
+        mock_corp_list.find_by_stock_code = Mock(return_value=mock_corp)
+        mock.return_value = mock_corp_list
+        yield mock
 
 
 class TestFilingSearchServiceInitialization:
@@ -31,12 +59,12 @@ class TestFilingSearchServiceInitialization:
 class TestSearchFilingsMethodSignature:
     """Test the search_filings method interface."""
     
-    def test_accepts_fetch_reports_request(self):
-        """Should accept FetchReportsRequest as input."""
+    def test_accepts_search_filings_request(self):
+        """Should accept SearchFilingsRequest as input."""
         service = FilingSearchService()
         
         # Valid request (uses our validated Pydantic model)
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930"],
             start_date="20230101",
             end_date="20241231",
@@ -71,7 +99,7 @@ class TestStockCodeToCorpCodeLookup:
         
         # Create service and search
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930"],
             start_date="20230101",
             end_date="20241231",
@@ -115,7 +143,7 @@ class TestStockCodeToCorpCodeLookup:
         
         # Search multiple companies
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930", "000660"],
             start_date="20230101",
             end_date="20241231",
@@ -152,7 +180,7 @@ class TestFilingSearch:
         
         # Search
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930"],
             start_date="20230101",
             end_date="20241231",
@@ -197,7 +225,7 @@ class TestFilingSearch:
         
         # Search multiple report types
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930"],
             start_date="20230101",
             end_date="20241231",
@@ -240,7 +268,7 @@ class TestFilingSearch:
         
         # Search 2 companies × 2 report types
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930", "000660"],
             start_date="20230101",
             end_date="20241231",
@@ -280,7 +308,7 @@ class TestFilingSearchResults:
         
         # Search
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930"],
             start_date="20230101",
             end_date="20241231",
@@ -316,7 +344,7 @@ class TestErrorHandling:
         mock_get_corp_list.return_value = mock_corp_list
         
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["999999"],  # Invalid code
             start_date="20230101",
             end_date="20241231",
@@ -342,7 +370,7 @@ class TestErrorHandling:
         mock_get_corp_list.return_value = mock_corp_list
         
         service = FilingSearchService()
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930"],
             start_date="20200101",
             end_date="20200131",  # Very narrow range
@@ -377,7 +405,7 @@ class TestPerformanceConsiderations:
         service = FilingSearchService()
         
         # Search with multiple companies and report types
-        request = FetchReportsRequest(
+        request = SearchFilingsRequest(
             stock_codes=["005930", "000660"],
             start_date="20230101",
             end_date="20241231",
@@ -394,8 +422,13 @@ class TestPerformanceConsiderations:
 class TestInputValidation:
     """Test that service properly uses validated inputs."""
     
-    def test_rejects_invalid_request_object(self):
-        """Should only accept FetchReportsRequest, not arbitrary dicts."""
+    @patch('dart_fss_text.services.filing_search.dart.get_corp_list')
+    def test_rejects_invalid_request_object(self, mock_get_corp_list):
+        """Should only accept SearchFilingsRequest, not arbitrary dicts."""
+        # Setup mock to avoid live API call
+        mock_corp_list = Mock()
+        mock_get_corp_list.return_value = mock_corp_list
+        
         service = FilingSearchService()
         
         # Invalid input (plain dict instead of validated model)
@@ -408,13 +441,13 @@ class TestInputValidation:
     
     def test_accepts_only_validated_report_types(self):
         """
-        FetchReportsRequest should reject invalid report types.
+        SearchFilingsRequest should reject invalid report types.
         
         This is tested in test_models.py, but verifying service relies on it.
         """
         # This should raise during Pydantic validation
         with pytest.raises(ValueError, match="Invalid report type"):
-            FetchReportsRequest(
+            SearchFilingsRequest(
                 stock_codes=["005930"],
                 start_date="20230101",
                 end_date="20241231",
