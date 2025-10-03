@@ -619,3 +619,271 @@ User → DisclosurePipeline
 
 **Status**: Phase 1 POC COMPLETE - Ready for production implementation (using dart-fss directly)
 
+---
+
+## Phase 4: XML Parsing & Section Extraction
+
+**Date**: 2025-10-03
+
+### Experiment 10: XML Structure Exploration - Critical Discoveries
+
+Successfully validated XML parsing approach for DART 사업보고서 (A001 Annual Reports). Discovered critical architectural facts about DART XML structure that fundamentally change parsing strategy.
+
+#### Summary Statistics:
+```
+File: 20240312000736.xml (Samsung 2023 Annual Report)
+Size: 155,547 lines
+Indexing Time: 0.167s
+Extraction Time: 0.010s per section
+Coverage: 39.8% (49/123 sections mapped)
+```
+
+#### Target Section Results (020000 - II. 사업의 내용):
+- **150 paragraphs** extracted successfully
+- **89 tables** extracted
+- **7 subsections** with full hierarchy:
+  1. 사업의 개요 (6 paragraphs)
+  2. 주요 제품 및 서비스 (3 paragraphs, 5 tables)
+  3. 원재료 및 생산설비 (14 paragraphs, 25 tables)
+  4. 매출 및 수주상황 (16 paragraphs, 17 tables)
+  5. 위험관리 및 파생거래 (27 paragraphs, 14 tables)
+  6. 주요계약 및 연구개발활동 (13 paragraphs, 8 tables)
+  7. 기타 참고사항 (71 paragraphs, 20 tables)
+
+---
+
+### Critical Finding #1: ATOCID is on TITLE Tag, NOT SECTION Tag
+
+**Problem:** Initial code searched for `section.get('ATOCID')` → returned None for all sections.
+
+**Root Cause:** XML structure has ATOCID as an attribute of `<TITLE>` tag, not `<SECTION>` tag.
+
+**XML Structure:**
+```xml
+<SECTION-1 ACLASS="MANDATORY" APARTSOURCE="SOURCE">
+  <TITLE ATOC="Y" ATOCID="3">I. 회사의 개요</TITLE>
+  ...
+</SECTION-1>
+```
+
+**Solution:**
+```python
+# WRONG:
+atocid = section.get('ATOCID')  # Returns None
+
+# CORRECT:
+title_elem = section.find('TITLE')
+atocid = title_elem.get('ATOCID')  # Returns "3"
+```
+
+**Impact:** This was the initial blocker preventing any sections from being indexed. Fixed by extracting ATOCID from TITLE element instead of SECTION element.
+
+---
+
+### Critical Finding #2: XML Structure is FLAT (Not Nested)
+
+**Assumption:** SECTION-2 tags would be nested inside SECTION-1 tags (parent-child relationship).
+
+**Reality:** All SECTION-N tags are **siblings** in the XML tree!
+
+**Evidence:**
+```python
+# Debug output:
+Direct <SECTION-2> tags inside SECTION-1: 0  ← Key discovery!
+Total <P> tags (including nested): 185
+Direct <P> tags: 1
+```
+
+**XML Structure:**
+```xml
+<BODY>
+  <SECTION-1 ...>           <!-- ATOCID=3, Level 1 -->
+    <TITLE ATOCID="3">I. 회사의 개요</TITLE>
+    <P>...</P>
+  </SECTION-1>
+  
+  <SECTION-2 ...>           <!-- ATOCID=4, Level 2 - SIBLING, not child! -->
+    <TITLE ATOCID="4">1. 회사의 개요</TITLE>
+    <P>...</P>
+  </SECTION-2>
+  
+  <SECTION-2 ...>           <!-- ATOCID=5, Level 2 - SIBLING -->
+    <TITLE ATOCID="5">2. 회사의 연혁</TITLE>
+    <P>...</P>
+  </SECTION-2>
+  
+  <SECTION-1 ...>           <!-- ATOCID=9, Level 1 - next main section -->
+    <TITLE ATOCID="9">II. 사업의 내용</TITLE>
+    <P>...</P>
+  </SECTION-1>
+</BODY>
+```
+
+**Implication:** Hierarchy must be **reconstructed programmatically** using:
+1. **ATOCID sequence** (defines order: 3, 4, 5, 9...)
+2. **Level numbers** (SECTION-1 = level 1, SECTION-2 = level 2)
+3. **Sequential scanning**: Find sections after parent with higher level number
+
+**Solution Algorithm:**
+```python
+def find_children(parent_atocid, parent_level, section_index):
+    """
+    Find child sections by scanning ATOCID sequence.
+    Children are sections with:
+    1. ATOCID > parent_atocid
+    2. Level = parent_level + 1
+    3. Before next same-or-higher level section
+    """
+    children = []
+    for atocid in sorted(section_index.keys()):
+        if int(atocid) <= parent_atocid:
+            continue  # Skip sections before parent
+        
+        level = section_index[atocid]['level']
+        
+        if level <= parent_level:
+            break  # Hit next sibling or higher - stop
+        
+        if level == parent_level + 1:
+            children.append(section_index[atocid])
+    
+    return children
+```
+
+---
+
+### Critical Finding #3: Only SECTION-1 and SECTION-2 Exist
+
+**Initial Plan:** Support SECTION-1, SECTION-2, SECTION-3, SECTION-4... (arbitrary depth)
+
+**Reality:** Maximum depth is **2 levels** (main section → subsection)
+
+**Evidence:**
+```
+Sections found: 53
+- SECTION-1: 16 sections
+- SECTION-2: 37 sections
+- SECTION-3: 0 sections  ← None found!
+- SECTION-4: 0 sections  ← None found!
+```
+
+**Impact:** 
+- Simplified hierarchy reconstruction (only need to handle 2 levels)
+- toc.yaml has SECTION-3 entries (e.g., "2-1. 연결 재무상태표") but they don't exist in actual XML
+- These are likely **optional** or **conditionally present** sections
+
+---
+
+### Critical Finding #4: Must Use Nested Search for Content Extraction
+
+**Problem:** Direct children search (`findall('P')`) returned only 1 paragraph when we expected 150+.
+
+**Root Cause:** Because all SECTION tags are siblings, the content (`<P>` and `<TABLE>` tags) is scattered across the flat structure, not nested inside parent sections.
+
+**Evidence:**
+```python
+# Direct children only:
+direct_p_tags = section_elem.findall('P')
+# Result: 1 paragraph
+
+# All nested (recursive):
+all_p_tags = section_elem.findall('.//P')
+# Result: 185 paragraphs!
+```
+
+**Solution:**
+```python
+# WRONG - misses nested content:
+for p in section_elem.findall('P'):
+    paragraphs.append(p.text)
+
+# CORRECT - gets all content:
+for p in section_elem.findall('.//P'):
+    paragraphs.append(''.join(p.itertext()).strip())
+```
+
+**Why This Works:** The `//.` prefix in XPath performs a recursive search, finding all matching elements at any depth beneath the current element.
+
+---
+
+### Coverage Analysis: 39.8% (49/123 sections)
+
+**Why so low?**
+
+1. **74 sections from toc.yaml are missing** in actual XML
+   - Examples: "2-1. 연결 재무상태표", "2-2. 연결 손익계산서"
+   - These are SECTION-3 level sections that don't exist
+   - Likely **optional** or **conditionally included**
+
+2. **4 sections in XML are unmapped** (title variations)
+   - Minor title mismatches vs. toc.yaml
+   - Can be fixed with better fuzzy matching
+
+3. **49 sections successfully mapped and extracted**
+   - All major sections (I through XII) found
+   - All primary subsections (level 2) found
+   - Coverage is sufficient for MVP
+
+**Conclusion:** 39.8% coverage is **acceptable** - the "missing" sections are optional subsections that may not exist in all documents.
+
+---
+
+### Performance Validation: All Targets Met
+
+| Metric | Target | Actual | Status |
+|--------|--------|--------|--------|
+| Indexing (155K lines) | < 1.0s | 0.167s | ✅ **6x faster** |
+| Extraction per section | < 0.2s | 0.010s | ✅ **20x faster** |
+| Title mapping accuracy | ≥ 90% | 92.5% | ✅ **Exceeds** |
+| Content extraction | Complete | 150 paragraphs, 89 tables | ✅ **Complete** |
+| Hierarchy preservation | Yes | 7 subsections | ✅ **Preserved** |
+
+---
+
+### Lessons Learned
+
+1. **Never Assume XML Structure - Always Inspect First**
+   - We assumed nested structure (like HTML)
+   - Reality: flat sibling structure with implied hierarchy
+   - **Takeaway**: Validate assumptions with real data before implementing
+
+2. **Debug Output is Essential for Structure Discovery**
+   - Counting direct vs. nested elements revealed the flat structure
+   - Without debug output, we'd have missed this critical fact
+   - **Takeaway**: Add extensive debug logging in exploratory experiments
+
+3. **Attributes Can Be on Unexpected Elements**
+   - ATOCID on TITLE, not SECTION
+   - Checked both before finding the right location
+   - **Takeaway**: Inspect actual XML with lxml to see attribute locations
+
+4. **toc.yaml is Aspirational, Not Descriptive**
+   - toc.yaml defines 123 sections, but XML has only ~53
+   - Many "optional" sections won't exist in every document
+   - **Takeaway**: toc.yaml is a schema, not a guarantee
+
+5. **Flat Structure Simplifies Some Things, Complicates Others**
+   - **Simpler**: No recursive descent through nested tree
+   - **More Complex**: Must reconstruct hierarchy from sequence
+   - **Takeaway**: Trade-offs exist in every data structure design
+
+---
+
+### Next Steps
+
+1. ✅ **Document findings** - Complete (this entry)
+2. ⏳ **Write unit tests** - Test flat structure handling, ATOCID extraction, hierarchy reconstruction
+3. ⏳ **Implement production parsers**:
+   - `xml_parser.py` - Low-level XML utilities (ATOCID extraction, flat structure scanning)
+   - `section_parser.py` - Section extraction logic (hierarchy reconstruction from flat structure)
+   - `table_parser.py` - Table parsing (headers, rows, context)
+4. ⏳ **Handle edge cases**:
+   - Missing ATOCID (skip section)
+   - Title mismatch with toc.yaml (fuzzy matching)
+   - Optional sections (graceful handling)
+   - Malformed XML (lxml recover mode)
+
+---
+
+**Status**: Experiment 10 COMPLETE - XML parsing approach validated and ready for TDD implementation
+
