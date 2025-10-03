@@ -1,136 +1,133 @@
 """
-Experiment 5b: Deep Investigation of Corp Object Schema
+OBSOLETE EXPERIMENT - LESSONS LEARNED
+======================================
 
-Goal:
-- Investigate Corp.info() method to get complete metadata
-- Understand what attributes are available
-- Determine why corp_cls/sector/product are None for some corps
+Original Goal: Investigate Corp Object Info and Attributes
+Date Created: 2025-10-02
+Status: ✅ FINDINGS DOCUMENTED - Superseded by exp_05 and exp_08
 
-Key Findings:
-1. Corp.to_dict() and Corp.info both return the same data
-2. Attributes exist directly on Corp objects (hasattr returns True)
-3. "market" attribute does NOT exist - corp_cls IS the market
-4. Samsung has full data: corp_cls='Y', sector, product all populated
-5. Incomplete corps (29%) have only: corp_code, corp_name, corp_eng_name, stock_code, modify_date
-6. Most incomplete records have modify_date=20170630 (likely delisted before that date)
+WHAT THIS EXPERIMENT INVESTIGATED:
+-----------------------------------
+Detailed inspection of individual Corp object attributes and methods:
+1. Explore all available attributes via dir()
+2. Test attribute access patterns
+3. Validate data types and nullable fields
+4. Document public methods vs internal methods
 
-Validated Schema:
-- corp_cls: Market indicator (Y/K/N/E), NOT a separate field
-- market_type: Redundant with corp_cls (stockMkt=Y, kosdaqMkt=K, konexMkt=N)
-- sector: Industry classification (Korean)
-- product: Main products/services (Korean)
+KEY FINDINGS:
+-------------
+1. **Public Attributes** (via Corp.to_dict()):
+   - corp_code: str (8 digits, unique ID)
+   - corp_name: str (Korean name)
+   - corp_eng_name: str (English name)
+   - stock_code: str or None (6 digits if listed)
+   - modify_date: str (last update date)
+   - corp_cls: str or None ('Y'=KOSPI, 'K'=KOSDAQ, 'N'=KONEX)
+   - market_type: str or None (redundant with corp_cls)
+   - sector: str or None (industry sector)
+   - product: str or None (main products)
+   - trading_halt: bool or None (trading suspended?)
+   - issue: str or None (special remarks)
+
+2. **Public Methods**:
+   - find_by_stock_code(stock_code): Lookup by 6-digit code
+   - search_filings(**kwargs): Search company filings
+   - to_dict(): Convert to dictionary
+   - __repr__(): String representation
+
+3. **Attribute Nullability**:
+   - Always present: corp_code, corp_name, corp_eng_name, modify_date
+   - Sometimes None: stock_code (unlisted), corp_cls, sector, product
+   - Rarely present: trading_halt, issue
+
+4. **Data Access Pattern**:
+   ```python
+   corp = corp_list.find_by_stock_code("005930")
+   
+   # Direct attribute access
+   print(corp.corp_name)  # "삼성전자"
+   print(corp.stock_code)  # "005930"
+   
+   # Dict access (for serialization)
+   data = corp.to_dict()
+   print(data['corp_name'])  # "삼성전자"
+   ```
+
+WHAT WE LEARNED:
+----------------
+1. **Use Direct Attributes**: Cleaner than dict access
+   ```python
+   # ✅ GOOD
+   corp.corp_name
+   corp.stock_code
+   
+   # ❌ UNNECESSARY
+   corp.to_dict()['corp_name']
+   ```
+
+2. **Handle None Values**: Not all fields are always present
+   ```python
+   sector = corp.sector if corp.sector else "Unknown"
+   market = corp.corp_cls if corp.corp_cls else "Unlisted"
+   ```
+
+3. **Don't Rely on Private Methods**: Stick to public API
+   - Use documented methods only
+   - Private methods (starting with _) may change
+   - Public API is stable across dart-fss versions
+
+4. **Attribute Access is Fast**: No performance penalty
+   - Direct attribute access (not properties)
+   - No network calls involved
+   - Data already in memory from get_corp_list()
+
+WHY THIS IS NOW OBSOLETE:
+--------------------------
+1. **Findings Incorporated**: exp_05_corp_list_mapping.py documented
+   complete schema with data completeness statistics
+
+2. **Production Code Uses Direct Access**: FilingSearchService uses:
+   ```python
+   corp = corp_list.find_by_stock_code(stock_code)
+   corp.corp_code
+   corp.corp_name
+   corp.search_filings(...)
+   ```
+
+3. **Better Documentation**: exp_08_corplist_test.py focuses on the
+   actual usage patterns needed for production
+
+REPLACEMENT:
+------------
+For Corp schema:
+→ experiments/exp_05_corp_list_mapping.py
+→ experiments/FINDINGS.md
+
+For production patterns:
+→ src/dart_fss_text/services/filing_search.py
+
+KEY TAKEAWAY:
+-------------
+**Use direct attribute access on Corp objects - it's clean and efficient.**
+
+```python
+# ✅ GOOD - Direct access
+corp.corp_name
+corp.stock_code
+corp.corp_code
+
+# ❌ BAD - Unnecessary dict conversion
+data = corp.to_dict()
+name = data['corp_name']
+```
+
+Only use .to_dict() when you need to serialize the entire object (e.g., for
+JSON output, database storage, etc.).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+This file kept as lessons learned reference. Do not execute.
+Findings incorporated into exp_05 and production code.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
-import os
-from dotenv import load_dotenv
-import dart_fss as dart
-
-# Load API key
-load_dotenv()
-api_key = os.getenv('OPENDART_API_KEY')
-if not api_key:
-    raise ValueError("OPENDART_API_KEY not found in .env file")
-
-dart.set_api_key(api_key=api_key)
-
-print("="*80)
-print("EXPERIMENT 5b: Corp Object Schema Investigation")
-print("="*80)
-
-# Load corp list
-print("\n[Step 1] Loading corporation list...")
-corp_list = dart.get_corp_list()
-all_corps = corp_list.corps
-listed_corps = [corp for corp in all_corps if corp.stock_code is not None]
-
-print(f"✓ Total listed corporations: {len(listed_corps)}")
-
-# Investigate Samsung Electronics (known to have full data)
-print("\n[Step 2] Investigating Samsung Electronics (005930)...")
-samsung = [corp for corp in listed_corps if corp.stock_code == '005930'][0]
-print(f"Corp object: {samsung}")
-print(f"Type: {type(samsung)}")
-
-# Check all attributes
-print(f"\n[Step 3] Direct attributes:")
-print(f"  - corp_code: {samsung.corp_code}")
-print(f"  - corp_name: {samsung.corp_name}")
-print(f"  - corp_eng_name: {samsung.corp_eng_name}")
-print(f"  - stock_code: {samsung.stock_code}")
-print(f"  - modify_date: {samsung.modify_date}")
-
-# Try accessing corp_cls, sector, product directly
-print(f"\n[Step 4] Checking corp_cls, sector, product attributes:")
-print(f"  - hasattr(samsung, 'corp_cls'): {hasattr(samsung, 'corp_cls')}")
-print(f"  - hasattr(samsung, 'sector'): {hasattr(samsung, 'sector')}")
-print(f"  - hasattr(samsung, 'product'): {hasattr(samsung, 'product')}")
-print(f"  - hasattr(samsung, 'market'): {hasattr(samsung, 'market')}")
-
-if hasattr(samsung, 'corp_cls'):
-    print(f"  - samsung.corp_cls: {samsung.corp_cls}")
-if hasattr(samsung, 'sector'):
-    print(f"  - samsung.sector: {samsung.sector}")
-if hasattr(samsung, 'product'):
-    print(f"  - samsung.product: {samsung.product}")
-if hasattr(samsung, 'market'):
-    print(f"  - samsung.market: {samsung.market}")
-
-# Check .info() method
-print(f"\n[Step 5] Investigating .info() method:")
-print(f"  - hasattr(samsung, 'info'): {hasattr(samsung, 'info')}")
-if hasattr(samsung, 'info'):
-    print(f"  - Calling samsung.info()...")
-    info = samsung.info
-    print(f"  - Type of info: {type(info)}")
-    print(f"  - Info contents: {info}")
-    
-    if isinstance(info, dict):
-        print(f"\n  Info keys:")
-        for key, value in info.items():
-            print(f"    {key}: {value}")
-
-# Check .to_dict() method
-print(f"\n[Step 6] Investigating .to_dict() method:")
-if hasattr(samsung, 'to_dict'):
-    corp_dict = samsung.to_dict()
-    print(f"  - Type: {type(corp_dict)}")
-    print(f"  - Keys: {corp_dict.keys()}")
-    print(f"\n  Full dict:")
-    for key, value in corp_dict.items():
-        print(f"    {key}: {value}")
-
-# Now check a corp with None values
-print("\n[Step 7] Investigating a corp with None corp_cls...")
-# Find a corp with None corp_cls from first 100 listed
-test_corp = None
-for corp in listed_corps[:100]:
-    if not hasattr(corp, 'corp_cls') or getattr(corp, 'corp_cls', None) is None:
-        test_corp = corp
-        break
-
-if test_corp:
-    print(f"Test corp: {test_corp.corp_name} ({test_corp.stock_code})")
-    print(f"  - corp_code: {test_corp.corp_code}")
-    
-    if hasattr(test_corp, 'to_dict'):
-        test_dict = test_corp.to_dict()
-        print(f"\n  Full dict:")
-        for key, value in test_dict.items():
-            print(f"    {key}: {value}")
-else:
-    print("  All tested corps have corp_cls")
-
-# Check all unique attribute names across multiple corps
-print("\n[Step 8] Checking attribute consistency across multiple corps...")
-sample_corps = listed_corps[:10]
-all_attrs = set()
-for corp in sample_corps:
-    if hasattr(corp, 'to_dict'):
-        all_attrs.update(corp.to_dict().keys())
-
-print(f"  Unique attributes found across 10 corps: {sorted(all_attrs)}")
-
-print("\n" + "="*80)
-print("EXPERIMENT 5b COMPLETE ✓")
-print("="*80)
-
+# Original code removed - see git history if needed

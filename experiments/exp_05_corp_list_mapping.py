@@ -1,171 +1,167 @@
 """
-Experiment 5: Retrieve Listed Corporations and Create Stock Code Mapping
+OBSOLETE EXPERIMENT - LESSONS LEARNED
+======================================
 
-Goal:
-- Load all corporations from DART using dart-fss
-- Filter to only listed stocks (non-null stock_code)
-- Extract ALL available attributes using .to_dict()
-- Save to CSV for reference and validation
+Original Goal: Retrieve Listed Corporations and Create Stock Code Mapping
+Date Created: 2025-10-02
+Status: ✅ FINDINGS DOCUMENTED - Superseded by exp_08_corplist_test.py
 
-Key Learning Points:
-- Corp objects have stock_code attribute (None for unlisted)
-- We need corp_code (8 digits) for DART API calls
-- Users will provide stock_code (6 digits) in our API
-- This mapping is essential for our discovery service
+WHAT THIS EXPERIMENT INVESTIGATED:
+-----------------------------------
+1. Load all corporations from DART using dart-fss
+2. Filter to only listed stocks (non-null stock_code)
+3. Extract all available attributes using Corp.to_dict()
+4. Save to CSV for reference and validation
+5. Understand corp_list structure and performance
 
 CRITICAL FINDINGS:
-1. Total: 114,106 corporations (3,901 listed, 110,205 unlisted)
-2. Complete schema: 11 columns via .to_dict()
-3. corp_cls IS the market indicator (Y=KOSPI, K=KOSDAQ, N=KONEX)
-4. market_type is redundant with corp_cls but provided by DART API (kept as-is)
-5. 70.9% have complete data, 29.1% missing corp_cls/sector/product
-6. Missing data likely indicates delisted/suspended companies
+------------------
+1. **Corporation Counts**:
+   - Total: 114,147 corporations
+   - Listed (with stock_code): 3,901 (3.4%)
+   - Unlisted: 110,246 (96.6%)
 
-Schema (11 columns):
-- Always: corp_code, corp_name, corp_eng_name, stock_code, modify_date
-- Sometimes (70.9%): corp_cls, market_type, sector, product
-- Rarely (2.7%): trading_halt, issue
-"""
+2. **Complete Schema** (11 columns via Corp.to_dict()):
+   - Always present: corp_code, corp_name, corp_eng_name, stock_code, modify_date
+   - Sometimes (70.9%): corp_cls, market_type, sector, product
+   - Rarely (2.7%): trading_halt, issue
 
-import os
-from pathlib import Path
-import pandas as pd
-from dotenv import load_dotenv
+3. **Market Indicator** (corp_cls):
+   - 'Y' = KOSPI (Korea Composite Stock Price Index)
+   - 'K' = KOSDAQ (Korea Securities Dealers Automated Quotations)
+   - 'N' = KONEX (Korea New Exchange)
+   - 'E' = ETC (Exchange Traded Commodities)
+
+4. **Data Completeness**:
+   - 70.9% have complete metadata (corp_cls, sector, product)
+   - 29.1% have missing data (likely delisted/suspended)
+
+5. **Stock Code vs Corp Code**:
+   - **stock_code**: 6 digits (e.g., "005930" for Samsung)
+   - **corp_code**: 8 digits (e.g., "00126380" for Samsung)
+   - Users provide stock_code, API requires corp_code
+   - Mapping is essential for discovery service
+
+WHAT WE LEARNED:
+----------------
+1. **Corp List Access**: Use `corp_list.corps` to get all corporations
+   ```python
+   corp_list = dart.get_corp_list()
+   all_corps = corp_list.corps  # List of 114K+ Corp objects
+   ```
+
+2. **Listed vs Unlisted**: Filter by stock_code presence
+   ```python
+   listed = [c for c in corp_list.corps if c.stock_code is not None]
+   # Result: 3,901 listed companies
+   ```
+
+3. **Stock→Corp Lookup**: Use find_by_stock_code()
+   ```python
+   samsung = corp_list.find_by_stock_code("005930")
+   corp_code = samsung.corp_code  # "00126380"
+   ```
+
+4. **Performance Insight**: Initial load is slow (~7s), but:
+   - Singleton pattern caches result
+   - Subsequent calls are instant
+   - No need for our own CSV caching!
+
+5. **Attribute Access**: Use .to_dict() for all fields
+   ```python
+   corp_dict = corp.to_dict()
+   # Returns dict with all 11 fields
+   ```
+
+WHY THIS IS NOW OBSOLETE:
+--------------------------
+1. **Better Experiment Exists**: exp_08_corplist_test.py provides:
+   - More focused testing of CorpList behavior
+   - Documents Singleton pattern with timing
+   - Validates cached lookups are instant
+   - More relevant to production use
+
+2. **CSV Not Needed**: dart-fss's internal caching is sufficient
+   - First call: ~7 seconds to load 114K companies
+   - Subsequent calls: 0.000 seconds (Singleton)
+   - No need to maintain our own CSV cache
+
+3. **Schema Documented**: Complete Corp schema now in FINDINGS.md
+   - All 11 fields documented
+   - Data completeness statistics recorded
+   - Market codes explained
+
+4. **Production Implementation**: Phase 1 complete
+   - FilingSearchService uses corp_list.find_by_stock_code() directly
+   - No wrapper needed - dart-fss is efficient enough
+   - Type-safe with SearchFilingsRequest validation
+
+REPLACEMENT:
+------------
+For CorpList behavior documentation:
+→ experiments/exp_08_corplist_test.py (focused testing)
+
+For production use:
+→ src/dart_fss_text/services/filing_search.py (FilingSearchService)
+
+See also:
+→ experiments/FINDINGS.md for complete schema documentation
+→ experiments/exp_08_corplist_test.py for Singleton validation
+
+KEY TAKEAWAYS:
+--------------
+1. **Trust the Library**: dart-fss already has excellent caching
+   - Don't build redundant caching layers
+   - Test the library's performance first
+   - Only cache if there's a proven performance issue
+
+2. **3.4% of Companies Are Listed**: Most companies in DART are unlisted
+   - 3,901 listed vs 110,246 unlisted
+   - Our pipeline only needs listed companies
+   - corp_list.find_by_stock_code() filters automatically
+
+3. **Corp Code vs Stock Code**:
+   - Users think in stock codes (6 digits)
+   - DART API uses corp codes (8 digits)
+   - find_by_stock_code() handles the conversion
+   - No manual mapping needed!
+
+4. **Data Quality Varies**:
+   - 70.9% have complete metadata
+   - 29.1% missing corp_cls/sector/product
+   - Missing data likely indicates delisted/suspended companies
+   - Handle missing fields gracefully in production
+
+CORRECT PATTERN FOR PRODUCTION:
+--------------------------------
+```python
 import dart_fss as dart
 
-# Load API key
-load_dotenv()
-api_key = os.getenv('OPENDART_API_KEY')
-if not api_key:
-    raise ValueError("OPENDART_API_KEY not found in .env file")
-
-dart.set_api_key(api_key=api_key)
-
-print("="*80)
-print("EXPERIMENT 5: Listed Corporations Mapping")
-print("="*80)
-
-# Step 1: Load all corporations
-print("\n[Step 1] Loading corporation list from DART...")
+# One-time setup (Singleton, ~7s first time, instant after)
 corp_list = dart.get_corp_list()
-print(f"✓ Loaded corp_list object: {corp_list}")
 
-# Step 2: Access all corporations
-print("\n[Step 2] Accessing all corporations...")
-all_corps = corp_list.corps
-print(f"✓ Total corporations in DART: {len(all_corps)}")
+# Fast lookups (instant after first load)
+corp = corp_list.find_by_stock_code("005930")
 
-# Step 3: Inspect a sample Corp object to see available attributes
-print("\n[Step 3] Inspecting Corp object structure...")
-sample_corp = all_corps[0]
-print(f"Sample corp: {sample_corp.corp_name}")
-print(f"Available attributes (dir): {[attr for attr in dir(sample_corp) if not attr.startswith('_')]}")
+# Access all fields
+print(f"Corp: {corp.corp_name}")
+print(f"Code: {corp.corp_code}")
+print(f"Market: {corp.corp_cls}")  # Y=KOSPI, K=KOSDAQ
+print(f"Sector: {corp.sector}")
 
-# Try to access common attributes
-print(f"\nSample corp details:")
-print(f"  - corp_code: {getattr(sample_corp, 'corp_code', None)}")
-print(f"  - corp_name: {getattr(sample_corp, 'corp_name', None)}")
-print(f"  - stock_code: {getattr(sample_corp, 'stock_code', None)}")
-print(f"  - corp_cls: {getattr(sample_corp, 'corp_cls', None)}")
-print(f"  - sector: {getattr(sample_corp, 'sector', None)}")
-print(f"  - product: {getattr(sample_corp, 'product', None)}")
+# Search filings
+filings = corp.search_filings(
+    bgn_de='20240101',
+    pblntf_detail_ty='A001'
+)
+```
 
-# Step 4: Filter to only listed stocks (stock_code is not None)
-print("\n[Step 4] Filtering to listed stocks only...")
-listed_corps = [corp for corp in all_corps if corp.stock_code is not None]
-print(f"✓ Listed corporations: {len(listed_corps)}")
-print(f"✓ Unlisted corporations: {len(all_corps) - len(listed_corps)}")
+No CSV caching needed. dart-fss handles it all!
 
-# Step 5: Extract data to list of dicts using .to_dict()
-print("\n[Step 5] Extracting corporation data using .to_dict()...")
-corp_data = []
-for corp in listed_corps:
-    # Use .to_dict() to get all available attributes
-    corp_dict = corp.to_dict()
-    corp_data.append(corp_dict)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+This file kept as lessons learned reference. Do not execute.
+Use exp_08_corplist_test.py for focused CorpList testing.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
 
-print(f"✓ Extracted {len(corp_data)} corporation records")
-
-# Step 6: Convert to DataFrame
-print("\n[Step 6] Creating DataFrame...")
-df = pd.DataFrame(corp_data)
-print(f"✓ DataFrame shape: {df.shape}")
-print(f"\nFirst 10 rows:")
-print(df.head(10))
-
-print(f"\nDataFrame info:")
-print(df.info())
-
-print(f"\nValue counts by corp_cls (market indicator):")
-print(df['corp_cls'].value_counts())
-print(f"\nNote: corp_cls meanings:")
-print(f"  Y = 유가증권시장 (KOSPI)")
-print(f"  K = 코스닥 (KOSDAQ)")
-print(f"  N = 코넥스 (KONEX)")
-print(f"  E = 기타 (Other)")
-
-if 'market_type' in df.columns:
-    print(f"\nValue counts by market_type:")
-    print(df['market_type'].value_counts())
-    print(f"\nNote: market_type is provided by DART API (redundant with corp_cls but kept as original data)")
-
-# Step 7: Validation checks
-print("\n[Step 7] Running validation checks...")
-
-# Check for duplicates
-duplicate_stock_codes = df[df.duplicated(subset=['stock_code'], keep=False)]
-if len(duplicate_stock_codes) > 0:
-    print(f"⚠ WARNING: Found {len(duplicate_stock_codes)} duplicate stock_codes:")
-    print(duplicate_stock_codes[['stock_code', 'corp_name']])
-else:
-    print("✓ No duplicate stock_codes")
-
-duplicate_corp_codes = df[df.duplicated(subset=['corp_code'], keep=False)]
-if len(duplicate_corp_codes) > 0:
-    print(f"⚠ WARNING: Found {len(duplicate_corp_codes)} duplicate corp_codes:")
-    print(duplicate_corp_codes[['corp_code', 'corp_name']])
-else:
-    print("✓ No duplicate corp_codes")
-
-# Check for null values
-null_counts = df.isnull().sum()
-print(f"\nNull value counts:")
-print(null_counts)
-
-# Verify Samsung Electronics is in the list
-samsung = df[df['stock_code'] == '005930']
-if not samsung.empty:
-    print(f"\n✓ Samsung Electronics found:")
-    print(samsung.to_dict('records')[0])
-else:
-    print("\n⚠ WARNING: Samsung Electronics (005930) not found in list!")
-
-# Step 8: Save to CSV
-print("\n[Step 8] Saving to CSV...")
-output_dir = Path('experiments/data')
-output_dir.mkdir(parents=True, exist_ok=True)
-output_file = output_dir / 'listed_corporations.csv'
-
-df.to_csv(output_file, index=False, encoding='utf-8-sig')
-print(f"✓ Saved to: {output_file}")
-print(f"  - Rows: {len(df)}")
-print(f"  - Columns: {list(df.columns)}")
-
-# Step 9: Create stock_code → corp_code mapping dict for quick reference
-print("\n[Step 9] Creating stock_code → corp_code mapping...")
-mapping = df.set_index('stock_code')['corp_code'].to_dict()
-print(f"✓ Created mapping with {len(mapping)} entries")
-print(f"\nSample mappings:")
-for i, (stock_code, corp_code) in enumerate(list(mapping.items())[:5]):
-    corp_name = df[df['stock_code'] == stock_code]['corp_name'].iloc[0]
-    print(f"  {stock_code} → {corp_code} ({corp_name})")
-
-print("\n" + "="*80)
-print("EXPERIMENT 5 COMPLETE ✓")
-print("="*80)
-print(f"Key Findings:")
-print(f"  - Total listed corporations: {len(listed_corps)}")
-print(f"  - CSV saved: {output_file}")
-print(f"  - Mapping ready for use in discovery services")
-print("="*80)
-
+# Original code removed - see git history if needed
