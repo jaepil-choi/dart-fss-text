@@ -28,9 +28,12 @@
 
 **dart-fss-text** provides an end-to-end pipeline for textual financial data: **discover → download → parse → store → query**. It leverages dart-fss for API authentication and company code management, then builds a complete workflow for textual disclosure documents.
 
+The library is designed with **explicit database control** - users connect to their database first, then inject that connection into the pipeline and query components. This ensures users can verify their database setup before processing any data.
+
 ### Key Differentiators
 
 - **Complete Pipeline**: From filing discovery to database storage—not just parsing
+- **Explicit Database Control**: Database connection managed separately, then injected into pipeline and query components
 - **Point-in-Time Aware**: Tracks published/amended dates to ensure proper temporal alignment
 - **NoSQL Database**: MongoDB backend for flexible storage, versioning, and vector embedding support
 - **Semantic Parsing**: Identifies document sections by their financial reporting meaning (e.g., "business overview", "risk factors")
@@ -74,68 +77,79 @@
 #### Use Case 1: Fetch and Store Reports
 
 ```python
-from dart_fss_text import DisclosurePipeline
+from dart_fss_text import StorageService, DisclosurePipeline
 
-# Initialize pipeline with MongoDB connection
-pipeline = DisclosurePipeline(mongo_uri="mongodb://localhost:27017/dart_disclosures")
+# Step 1: Establish database connection explicitly
+storage = StorageService()  # Reads from .env or config
+# User can verify connection before proceeding
 
-# Fetch reports directly - dart-fss handles company lookup automatically
-results = pipeline.fetch_reports(
+# Step 2: Initialize pipeline with storage connection
+pipeline = DisclosurePipeline(storage_service=storage)
+
+# Step 3: Fetch, parse, and store reports
+stats = pipeline.download_and_parse(
     stock_codes=["005930", "000660"],  # Samsung, SK Hynix
-    start_date="20230101",
-    end_date="20241231",
-    report_types=["A001", "A002"],  # A001=Annual, A002=Semi-Annual
+    years=[2023, 2024],
+    report_type="A001"  # Annual Report
 )
 
-# Returns: {downloaded: 8, parsed: 8, stored: 8, failed: 0}
+# Returns statistics: {'reports': 4, 'sections': 194, 'failed': 0}
 
-# Note: dart-fss get_corp_list() loads once (~7s first call), 
-# then instant on all subsequent calls (Singleton pattern)
+# Note: dart-fss handles company lookup automatically
+# First call: ~7s to load corp list, subsequent calls: instant (cached)
 ```
 
 #### Use Case 2: Query Stored Text
 
 ```python
-from dart_fss_text import TextQuery
+from dart_fss_text import StorageService, TextQuery
 
-# Query database for specific sections
-query = TextQuery(mongo_uri="mongodb://localhost:27017/dart_disclosures")
+# Connect to database containing parsed sections
+storage = StorageService()
 
-# Get business descriptions for Samsung across time
-results = query.get_section(
-    stock_code="005930",
-    section_name="주요 사업의 내용",
-    start_date="2020-01-01",
-    end_date="2024-12-31",
-    as_of_date="2024-03-01"  # PIT: only docs published before this date
+# Initialize query interface
+query = TextQuery(storage_service=storage)
+
+# Retrieve specific sections across companies and time
+result = query.get(
+    stock_codes=["005930", "000660"],  # Samsung, SK Hynix
+    years=[2023, 2024],
+    section_codes="020100"  # Business overview section
 )
 
-for doc in results:
-    print(f"{doc.published_date}: {doc.text[:200]}...")
-    print(f"Tables: {doc.tables}")
+# Result structure: {year: {stock_code: Sequence}}
+# Access text for Samsung 2024
+samsung_2024 = result["2024"]["005930"]
+print(f"Text: {samsung_2024.text[:200]}...")
+print(f"Sections: {samsung_2024.section_count}")
 ```
 
 #### Use Case 3: NLP Integration
 
 ```python
-from dart_fss_text import TextQuery
+from dart_fss_text import StorageService, TextQuery
 from sentence_transformers import SentenceTransformer
+
+# Connect to database
+storage = StorageService()
+query = TextQuery(storage_service=storage)
 
 # Load embedding model
 model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
 
-# Query and embed
-query = TextQuery(mongo_uri="mongodb://localhost:27017/dart_disclosures")
-sections = query.get_section(stock_code="005930", section_name="주요 사업의 내용")
+# Retrieve business descriptions across multiple years
+result = query.get(
+    stock_codes="005930",
+    years=[2020, 2021, 2022, 2023, 2024],
+    section_codes="020100"  # Business overview
+)
 
-for section in sections:
-    # Generate embeddings
-    embedding = model.encode(section.text)
-    
-    # Store back to MongoDB
-    query.update_embedding(section.id, embedding.tolist())
-
-# Now ready for semantic search, clustering, etc.
+# Generate embeddings for time series analysis
+for year, companies in result.items():
+    sequence = companies["005930"]
+    embedding = model.encode(sequence.text)
+    # Store embeddings for semantic similarity analysis
+    # ... downstream NLP workflows ...
 ```
 
 ---
@@ -160,16 +174,15 @@ for section in sections:
 
 ### Filing Discovery & Filtering
 
-1. **Filing Discovery & Filtering**
-   - **API Method**: `pipeline.fetch_reports(stock_codes, start_date, end_date, report_types)`
-   - **Input Parameters**:
-     - `stock_codes` (List[str], mandatory): Company stock codes (e.g., `["005930", "000660"]`)
-     - `start_date`, `end_date` (str): Date range in YYYYMMDD format (e.g., `"20240101"`, `"20241231"`)
-     - `report_types` (List[str]): DART report type codes (e.g., `["A001", "A002"]`)
-   - **Internal Process**:
-     - Use `dart.get_corp_list().find_by_stock_code()` to convert stock_codes → corp_codes
-     - Leverage dart-fss for filing search with `pblntf_detail_ty` parameter
-     - Search filings that match all filters
+1. **Complete Pipeline Orchestration**
+   - **Design Philosophy**: Users first establish explicit database connection, then inject it into pipeline components
+   - **Primary Method**: `pipeline.download_and_parse()` handles the full workflow: search → download → parse → store
+   - **Input Parameters**: Stock codes, years/date ranges, report types
+   - **Return Value**: Statistics dictionary with counts of reports processed, sections stored, and failures
+   - **Separation of Concerns**: 
+     - `StorageService`: Database connection (explicit, verifiable)
+     - `DisclosurePipeline`: Orchestrates discovery, download, parsing, storage (injected storage)
+     - `TextQuery`: Retrieves parsed data from database (injected storage)
 
 2. **Discovering Available Report Types**
    - Users discover valid codes via existing `ReportTypes` helper class:
@@ -373,20 +386,19 @@ For detailed technical dependencies, module structure, and system architecture, 
 
 **Features**:
 
-- [ ] `DisclosurePipeline` class:
-  - `fetch_reports(stock_codes, start_date, end_date, report_types)`: Search and download
-  - `preview_filings(stock_codes, start_date, end_date, report_types)`: Show metadata before download
-  - `get_company_info(stock_code)`: Retrieve company metadata via dart-fss
+- [ ] `FilingSearchService` class: Search DART API for available reports
+- [ ] `DocumentDownloadService` class: Download and organize XML files
+- [ ] Helper methods for company info and report type discovery
 
 **Tests**:
 
-- [ ] Unit tests for each API method (mocked dart-fss calls)
+- [ ] Unit tests for each service (mocked dart-fss calls)
 - [ ] Integration tests with live DART API (marked for CI skip)
 - [ ] Edge cases: invalid stock codes, no results, API errors
 
 **Deliverables**:
 
-- [ ] Working code in `src/dart_fss_text/discovery/`
+- [ ] Working code in `src/dart_fss_text/services/`
 - [ ] Test suite with ≥ 85% coverage
 - [ ] User documentation and examples
 
@@ -451,24 +463,27 @@ For detailed technical dependencies, module structure, and system architecture, 
 
 ### Milestone 5: End-to-End Pipeline
 
-**Goal**: Complete workflow from company list to populated database
+**Goal**: High-level orchestrator connecting all components
 
 **Features**:
 
 - [ ] `DisclosurePipeline` class (orchestrator):
-  - `fetch_and_store(stock_codes, dates, report_types)`: Full pipeline
+  - Takes `StorageService` as injected dependency
+  - `download_and_parse()`: Full workflow (search → download → parse → store)
+  - Returns statistics dictionary with processing results
   - Progress tracking and error handling
-  - Idempotency (skip already-downloaded files)
+  - Idempotency (skip already-processed files)
 
 **Tests**:
 
 - [ ] End-to-end integration tests
 - [ ] Performance benchmarks
+- [ ] Showcase demonstrating complete workflow with real data
 
 **Deliverables**:
 
-- [ ] Complete pipeline in `src/dart_fss_text/pipeline.py`
-- [ ] CLI tool: `dart-fss-text fetch --stocks 005930 --start 2023-01-01`
+- [ ] Complete pipeline in `src/dart_fss_text/pipeline/`
+- [ ] Updated showcase demonstrating simplified workflow
 - [ ] Comprehensive user guide
 
 ---
