@@ -54,10 +54,10 @@
 #### 1. **API Layer**
    - **Purpose**: User-facing interfaces for discovery and querying
    - **Components**:
-     - `DisclosurePipeline`: Orchestrates the complete workflow
-     - `TextQuery`: Query interface for stored documents
-     - `DiscoveryAPI`: Search and preview filings before download
-   - **Responsibilities**: Input validation, parameter normalization, error handling
+     - `DisclosurePipeline`: High-level orchestrator for search → download → parse → store workflow
+     - `TextQuery`: Query interface for retrieving parsed sections from database
+   - **Design Principle**: Explicit database control via dependency injection
+   - **Responsibilities**: Input validation, parameter normalization, error handling, workflow orchestration
 
 #### 2. **Business Logic Layer**
    - **Purpose**: Core processing and orchestration
@@ -966,7 +966,11 @@ src/
   - Single `get()` method for all research use cases
   - Dependency injection for `StorageService`
   - Returns `Dict[year][stock_code] → Sequence`
-- **pipeline.py**: (Future) End-to-end orchestration (`DisclosurePipeline`)
+- **pipeline.py**: High-level orchestrator (`DisclosurePipeline`)
+  - Takes `StorageService` as injected dependency
+  - `download_and_parse()` method for complete workflow
+  - Returns statistics dictionary: `{'reports': N, 'sections': M, 'failed': 0}`
+  - Coordinates `FilingSearchService`, XML parsing, and storage
 
 #### **services/**
 - **filing_search.py**: Filing discovery using dart-fss
@@ -1209,87 +1213,106 @@ class DownloadService:
 **Rationale**: dart-fss IS the adapter layer for DART API. Adding another layer would be over-engineering.
 
 ### 6. **Facade Pattern** (API Layer)
-Simplified interface leveraging dart-fss directly:
+High-level orchestrator with explicit database control:
 
 ```python
+from typing import List, Dict, Union
+
 class DisclosurePipeline:
     """
-    Facade for the complete workflow.
+    Facade for the complete workflow: search → download → parse → store.
     
-    Simplified: No Phase 0 needed - dart-fss handles company lookup.
+    Design Philosophy:
+    - Explicit database control: StorageService injected by user
+    - User verifies DB connection before processing
+    - Coordinates FilingSearchService and parsing components
+    - Returns statistics for monitoring and validation
     """
     
-    def __init__(self, mongo_uri: str):
-        # Initialize all subsystems
-        self._search_service = FilingSearchService()
-        self._parser_service = DocumentParserService()
-        self._storage_manager = StorageManager(mongo_uri)
-        # No corp_manager needed - dart-fss handles it!
-    
-    def fetch_reports(
-        self, 
-        stock_codes: List[str], 
-        start_date: str,
-        end_date: str,
-        report_types: List[str]
-    ) -> Dict[str, int]:
+    def __init__(self, storage_service: StorageService):
         """
-        Search, download, parse, and store filings.
+        Initialize pipeline with injected storage service.
         
         Args:
-            stock_codes: List of 6-digit stock codes (e.g., ["005930"])
-            start_date: Start date in YYYYMMDD format (e.g., "20240101")
-            end_date: End date in YYYYMMDD format (e.g., "20241231")
-            report_types: DART codes (e.g., ["A001", "A002"])
+            storage_service: Pre-initialized StorageService with verified connection
+        
+        Example:
+            storage = StorageService()  # User controls DB connection
+            pipeline = DisclosurePipeline(storage_service=storage)
+        """
+        self._storage = storage_service
+        self._filing_search = FilingSearchService()
+        # Parsing services initialized as needed
+    
+    def download_and_parse(
+        self,
+        stock_codes: Union[str, List[str]],
+        years: Union[int, List[int]],
+        report_type: str = "A001"
+    ) -> Dict[str, int]:
+        """
+        Complete workflow: search → download → parse → store.
+        
+        Args:
+            stock_codes: Company stock codes (e.g., ["005930", "000660"])
+            years: Years to fetch (e.g., [2023, 2024])
+            report_type: DART report type code (default: "A001")
         
         Returns:
-            Summary: {downloaded: int, parsed: int, stored: int, failed: int}
+            Statistics dictionary:
+            {
+                'reports': 4,      # Reports processed
+                'sections': 194,   # Sections stored
+                'failed': 0        # Failed operations
+            }
         
-        Note:
-            dart-fss get_corp_list() loads once (~7s first call),
-            then instant on all subsequent calls (Singleton).
+        Example:
+            stats = pipeline.download_and_parse(
+                stock_codes=["005930", "000660"],
+                years=[2023, 2024],
+                report_type="A001"
+            )
+            print(f"Stored {stats['sections']} sections from {stats['reports']} reports")
         """
-        # Search filings - dart-fss handles company lookup internally
-        filings = self._search_service.search_filings(
-            stock_codes=stock_codes,
-            start_date=start_date,
-            end_date=end_date,
-            report_types=report_types
-        )
+        # Normalize inputs
+        stock_codes = [stock_codes] if isinstance(stock_codes, str) else stock_codes
+        years = [years] if isinstance(years, int) else years
         
-        # Download, parse, store...
-        results = {
-            "downloaded": 0,
-            "parsed": 0,
-            "stored": 0,
-            "failed": 0
-        }
+        # Initialize statistics
+        stats = {'reports': 0, 'sections': 0, 'failed': 0}
         
-        for filing in filings:
-            # Download
-            xml_path = self._search_service.download_filing(filing)
-            results["downloaded"] += 1
-            
-            # Parse
-            document = self._parser_service.parse(xml_path)
-            results["parsed"] += 1
-            
-            # Store
-            self._storage_manager.insert_filing(document)
-            results["stored"] += 1
+        # Process each company and year
+        for year in years:
+            for stock_code in stock_codes:
+                try:
+                    # Search for filings
+                    filings = self._filing_search.search_filings(...)
+                    
+                    # Download XML
+                    xml_path = self._download(filing)
+                    
+                    # Parse sections
+                    sections = self._parse(xml_path)
+                    
+                    # Store in MongoDB (using injected storage)
+                    self._storage.insert_sections(sections)
+                    
+                    stats['reports'] += 1
+                    stats['sections'] += len(sections)
+                    
+                except Exception as e:
+                    stats['failed'] += 1
+                    # Log error
         
-        return results
-    
-    def get_company_info(self, stock_code: str) -> Dict:
-        """Helper: Get company metadata via dart-fss."""
-        return self._search_service.get_company_info(stock_code)
+        return stats
 ```
 
 **Benefits**: 
-- **Simpler**: No Phase 0, no explicit initialization
-- **Less code**: Removed 925 lines (CorpListManager + tests)
-- **Leverages dart-fss**: Uses proven Singleton caching
-- **Just works**: No cache management needed
+- **Explicit Control**: User manages database connection separately
+- **Testability**: Easy to inject mock StorageService for testing
+- **Flexibility**: Can configure storage before passing to pipeline
+- **Statistics**: Returns actionable metrics for validation
+- **Separation of Concerns**: Pipeline doesn't manage database lifecycle
 
 ---
 
@@ -1606,39 +1629,80 @@ CMD ["python", "-m", "dart_fss_text.cli"]
 # Year from rcept_dt (publication date) for PIT correctness
 ```
 
-### Phase 3: Document Parsing (Pending)
+### Phase 3: Document Parsing (Complete)
 
-**Planned Components:**
-- ⏳ `services/document_parser.py` - DocumentParserService
-- ⏳ `parsers/xml_parser.py` - Low-level XML parsing
-- ⏳ `parsers/section_parser.py` - Section extraction
-- ⏳ `parsers/table_parser.py` - Table parsing
-- ⏳ `services/section_mapper.py` - USERMARK → semantic name mapping
+**Completed Components:**
+- ✅ `parsers/xml_parser.py` - Low-level XML parsing utilities
+  - `load_toc_mapping()` - Load TOC (Table of Contents) mapping
+  - `build_section_index()` - Create ATOCID-based section index
+  - `extract_section_by_code()` - Extract section content
+  - Handles flat XML structure with hierarchy reconstruction
+  
+- ✅ `models/section.py` - SectionDocument Pydantic model
+  - MongoDB schema with validation
+  - Flat structure (one document per section)
+  - Denormalized metadata for query performance
 
-### Phase 4: MongoDB Storage (Pending)
+**Experiments:**
+- ✅ exp_10_xml_structure_exploration.py - Documents XML structure discovery
+  - Flat XML structure requiring programmatic hierarchy reconstruction
+  - ATOCID-based ordering and parent-child relationships
+  - TOC-based section identification
 
-**Planned Components:**
-- ⏳ `storage/storage_manager.py` - CRUD operations
-- ⏳ `integrations/mongodb_client.py` - Connection management
-- ⏳ Schema creation and indexing scripts
+### Phase 4: MongoDB Storage (Complete)
 
-### Phase 5: API Layer (Pending)
+**Completed Components:**
+- ✅ `services/storage_service.py` - StorageService
+  - CRUD operations for SectionDocument
+  - `insert_sections()` - Bulk insert with duplicate handling
+  - `get_sections_by_company()` - Query by stock_code and year
+  - `get_report_sections()` - Get all sections of a report (sorted by ATOCID)
+  - Connection management with configurable parameters
+  
+- ✅ `models/metadata.py` - ReportMetadata (composition component)
+- ✅ `models/sequence.py` - Sequence (collection class)
+  - Ordered collection of SectionDocument objects
+  - Merged text access with customizable separator
+  - Indexing by position, section_code, or slice
+  - Delegated metadata access
 
-**Planned Components:**
+**Test Coverage:**
+- ✅ Unit tests for StorageService (mocked MongoDB)
+- ✅ Integration tests with live MongoDB
+- ✅ Unit tests for ReportMetadata and Sequence
+
+**Experiments:**
+- ✅ exp_11_mongodb_storage.py - Validates MongoDB integration
+
+### Phase 5: API Layer (In Progress)
+
+**Completed Components:**
+- ✅ `api/query.py` - TextQuery interface
+  - Single `get()` method for all research use cases
+  - Dependency injection for StorageService
+  - Returns `Dict[year][stock_code] → Sequence`
+  - Supports single retrieval, cross-sectional, time-series, and panel data queries
+
+**In Progress:**
 - ⏳ `api/pipeline.py` - DisclosurePipeline orchestrator
-- ⏳ `api/query.py` - TextQuery interface
-- ⏳ End-to-end pipeline integration
+  - Takes `StorageService` as injected dependency
+  - `download_and_parse()` method for complete workflow
+  - Returns statistics dictionary
 
-### Development Metrics (as of 2025-10-03)
+**Pending:**
+- ⏳ End-to-end pipeline integration with all components
+
+### Development Metrics (as of 2025-10-04)
 
 | Metric | Value |
 |--------|-------|
-| Total Tests | 128 (125 run by default) |
+| Total Tests | 200+ |
 | Test Pass Rate | 100% |
-| Code Coverage | ~95% (Phase 1 only) |
-| Phases Complete | 1/5 |
-| Lines of Code | ~2,500 |
-| API Calls Used | 59/20,000 daily quota |
+| Code Coverage | ~90% |
+| Phases Complete | 4/5 (Phase 5 in progress) |
+| Lines of Code | ~5,000+ |
+| Key Components | FilingSearchService, StorageService, TextQuery, Parsers, Models |
+| Showcase Scripts | 2 (sample data + live data) |
 
 ---
 
@@ -1651,7 +1715,7 @@ CMD ["python", "-m", "dart_fss_text.cli"]
 
 ---
 
-**Last Updated**: 2025-10-03  
-**Version**: 1.1  
-**Status**: Active Development (Phase 1 Complete)
+**Last Updated**: 2025-10-04  
+**Version**: 1.2  
+**Status**: Active Development (Phase 5 in progress - DisclosurePipeline)
 
