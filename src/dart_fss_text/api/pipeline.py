@@ -363,6 +363,26 @@ class DisclosurePipeline:
                             # Continue processing remaining filings
                             continue
                 
+                except ValueError as e:
+                    # Authentication/Authorization errors should fail fast
+                    if 'Unauthorized' in str(e) or 'api_key' in str(e).lower():
+                        logger.error(
+                            f"Authentication failed: {e}. "
+                            "Check OPENDART_API_KEY in .env file."
+                        )
+                        raise ValueError(
+                            f"Authentication failed: {e}. "
+                            "Stopping pipeline. Please check OPENDART_API_KEY."
+                        ) from e
+                    
+                    # Other ValueErrors - continue processing
+                    logger.error(
+                        f"Failed to search filings for {stock_code} {year}: {e}",
+                        exc_info=True
+                    )
+                    stats['failed'] += 1
+                    continue
+                
                 except Exception as e:
                     logger.error(
                         f"Failed to search filings for {stock_code} {year}: {e}",

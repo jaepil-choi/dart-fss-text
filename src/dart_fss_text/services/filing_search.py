@@ -15,6 +15,7 @@ from typing import List
 import dart_fss as dart
 
 from dart_fss_text.models.requests import SearchFilingsRequest
+from dart_fss_text.config import get_app_config
 
 
 class FilingSearchService:
@@ -48,8 +49,24 @@ class FilingSearchService:
     """
     
     def __init__(self):
-        """Initialize the filing search service."""
-        pass  # No initialization needed - dart-fss handles state
+        """
+        Initialize the filing search service.
+        
+        Sets the DART API key for dart-fss from config.
+        
+        Raises:
+            ValueError: If OPENDART_API_KEY is not set in config/environment
+        """
+        config = get_app_config()
+        
+        # Set API key for dart-fss
+        if not config.opendart_api_key:
+            raise ValueError(
+                "OPENDART_API_KEY not found in environment. "
+                "Please set it in .env file or environment variables."
+            )
+        
+        dart.set_api_key(api_key=config.opendart_api_key)
     
     def search_filings(self, request: SearchFilingsRequest) -> List:
         """
