@@ -274,3 +274,91 @@ def get_app_config() -> AppConfig:
         _app_config = AppConfig()
     return _app_config
 
+
+# TOC (Table of Contents) Configuration
+_toc_mapping: Optional[Dict[str, str]] = None
+
+
+def get_toc_mapping(report_type: str = 'A001') -> Dict[str, str]:
+    """
+    Get TOC (Table of Contents) mapping for a report type.
+    
+    Loads from config/toc.yaml and caches the result. The TOC mapping
+    provides a title → section_code dictionary for standardized section
+    identification in DART XML files.
+    
+    Args:
+        report_type: Report type code (e.g., 'A001' for Annual Report)
+    
+    Returns:
+        Dictionary mapping section titles to section codes
+        Example: {'I. 회사의 개요': '010000', '1. 회사의 개요': '010100', ...}
+    
+    Raises:
+        FileNotFoundError: If config/toc.yaml not found
+        KeyError: If report_type not found in TOC configuration
+    
+    Example:
+        >>> toc = get_toc_mapping('A001')
+        >>> toc['I. 회사의 개요']
+        '010000'
+        >>> toc2 = get_toc_mapping('A001')
+        >>> toc is toc2  # Same cached instance
+        True
+    
+    Notes:
+        - Currently only supports A001 (Annual Report)
+        - Result is cached after first load for efficiency
+        - Mapping is flattened from hierarchical TOC structure
+    """
+    global _toc_mapping
+    
+    # Return cached result if available
+    if _toc_mapping is not None:
+        return _toc_mapping
+    
+    # Find config/toc.yaml file
+    current_file = Path(__file__)
+    project_root = current_file.parent.parent.parent
+    toc_path = project_root / 'config' / 'toc.yaml'
+    
+    if not toc_path.exists():
+        # Try alternative: relative to current working directory
+        toc_path = Path('config/toc.yaml')
+    
+    if not toc_path.exists():
+        raise FileNotFoundError(
+            f"TOC config file not found at {toc_path}. "
+            f"Ensure config/toc.yaml exists in project root."
+        )
+    
+    # Load YAML
+    with open(toc_path, 'r', encoding='utf-8') as f:
+        toc_data = yaml.safe_load(f)
+    
+    if report_type not in toc_data:
+        raise KeyError(
+            f"Report type '{report_type}' not found in TOC configuration. "
+            f"Available types: {list(toc_data.keys())}"
+        )
+    
+    # Flatten hierarchical structure to title → code mapping
+    mapping = {}
+    
+    def traverse(sections: list) -> None:
+        """Recursively traverse TOC structure."""
+        for section in sections:
+            code = section['section_code']
+            name = section['section_name']
+            mapping[name] = code
+            
+            if section.get('children'):
+                traverse(section['children'])
+    
+    traverse(toc_data[report_type])
+    
+    # Cache the result
+    _toc_mapping = mapping
+    
+    return mapping
+

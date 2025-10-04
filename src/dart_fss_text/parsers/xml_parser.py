@@ -10,42 +10,31 @@ Key architectural discoveries (Experiment 10):
 from pathlib import Path
 from typing import Dict, Any, Optional
 from lxml import etree
-import yaml
 
 
-def load_toc_mapping(toc_path: Path = Path('config/toc.yaml')) -> Dict[str, str]:
+def load_toc_mapping(report_type: str = 'A001') -> Dict[str, str]:
     """
-    Load TOC (Table of Contents) mapping from toc.yaml.
+    Load TOC (Table of Contents) mapping via config facade.
     
-    Creates a title → section_code mapping for A001 (Annual Reports).
+    DEPRECATED: This function is maintained for backward compatibility.
+    New code should use `from dart_fss_text.config import get_toc_mapping` directly.
+    
+    Creates a title → section_code mapping for specified report type.
     
     Args:
-        toc_path: Path to toc.yaml configuration file
+        report_type: Report type code (e.g., 'A001' for Annual Report)
     
     Returns:
         Dictionary mapping section titles to section codes
         Example: {'I. 회사의 개요': '010000', ...}
+    
+    Example:
+        >>> toc = load_toc_mapping('A001')
+        >>> toc['I. 회사의 개요']
+        '010000'
     """
-    with open(toc_path, 'r', encoding='utf-8') as f:
-        toc = yaml.safe_load(f)
-    
-    mapping = {}
-    
-    def traverse(sections, parent_code=''):
-        """Recursively traverse TOC structure."""
-        for section in sections:
-            code = section['section_code']
-            name = section['section_name']
-            mapping[name] = code
-            
-            if section.get('children'):
-                traverse(section['children'], code)
-    
-    # Extract A001 (Annual Report) structure
-    if 'A001' in toc:
-        traverse(toc['A001'])
-    
-    return mapping
+    from dart_fss_text.config import get_toc_mapping
+    return get_toc_mapping(report_type)
 
 
 def build_section_index(

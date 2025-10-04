@@ -8,14 +8,13 @@ Handles all MongoDB operations for storing and retrieving parsed sections:
 - Index management
 """
 
-import os
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 from pymongo import MongoClient, ASCENDING
 from pymongo.errors import DuplicateKeyError, ConnectionFailure, PyMongoError
-from dotenv import load_dotenv
 
 from dart_fss_text.models import SectionDocument
+from dart_fss_text.config import get_app_config
 
 
 class StorageService:
@@ -35,10 +34,10 @@ class StorageService:
         >>> with StorageService() as service:
         ...     service.insert_sections(documents)
     
-    Environment Variables:
-        - MONGODB_URI: MongoDB connection string (default: mongodb://localhost:27017/)
-        - MONGODB_DATABASE: Database name (default: dart_fss_text)
-        - MONGODB_COLLECTION: Collection name (default: A001)
+    Environment Variables (via config facade):
+        - MONGO_HOST: MongoDB host (default: localhost:27017)
+        - DB_NAME: Database name (default: FS)
+        - COLLECTION_NAME: Collection name (default: A001)
     """
     
     def __init__(
@@ -50,21 +49,31 @@ class StorageService:
         """
         Initialize StorageService with MongoDB connection.
         
+        Configuration is loaded via config facade (get_app_config()).
+        Parameters take precedence over config values.
+        
         Args:
-            mongo_uri: MongoDB connection string (uses MONGODB_URI env if None)
-            database: Database name (uses MONGODB_DATABASE env if None)
-            collection: Collection name (uses MONGODB_COLLECTION env if None)
+            mongo_uri: MongoDB connection string (overrides config if provided)
+            database: Database name (overrides config if provided)
+            collection: Collection name (overrides config if provided)
         
         Raises:
             ConnectionFailure: If MongoDB connection fails
-        """
-        # Load environment variables
-        load_dotenv()
         
-        # Get configuration (priority: parameter > env > default)
-        self.mongo_uri = mongo_uri or os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
-        self.database_name = database or os.getenv('MONGODB_DATABASE', 'dart_fss_text')
-        self.collection_name = collection or os.getenv('MONGODB_COLLECTION', 'A001')
+        Example:
+            >>> # Use config defaults
+            >>> service = StorageService()
+            >>> 
+            >>> # Override specific values
+            >>> service = StorageService(database='test_db')
+        """
+        # Load configuration from config facade
+        config = get_app_config()
+        
+        # Get configuration (priority: parameter > config > default)
+        self.mongo_uri = mongo_uri or config.mongodb_uri
+        self.database_name = database or config.mongodb_database
+        self.collection_name = collection or config.mongodb_collection
         
         # Connect to MongoDB
         self.client = MongoClient(
