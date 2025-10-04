@@ -1,8 +1,11 @@
 """
 Configuration management using Pydantic Settings.
 
-Automatically loads configuration from config/types.yaml and provides
-type-safe access to DART API specifications (report types, corp classes, etc.).
+Automatically loads configuration from config/types.yaml and environment variables.
+Provides type-safe access to:
+- DART API specifications (report types, corp classes, etc.)
+- MongoDB connection settings
+- DART API key
 """
 
 from pathlib import Path
@@ -163,4 +166,111 @@ def get_config() -> ReportTypesConfig:
     if _config is None:
         _config = ReportTypesConfig()
     return _config
+
+
+class AppConfig(BaseSettings):
+    """
+    Application configuration loaded from environment variables.
+    
+    Provides centralized access to runtime configuration:
+    - MongoDB connection settings
+    - DART API key
+    - Other application settings
+    
+    Environment Variables (from .env):
+        MONGO_HOST: MongoDB host (e.g., "localhost:27017")
+        DB_NAME: MongoDB database name (e.g., "FS")
+        COLLECTION_NAME: MongoDB collection name (e.g., "A001")
+        OPENDART_API_KEY: OpenDART API key for DART API access
+    
+    Attributes:
+        mongo_host: MongoDB host address
+        db_name: MongoDB database name
+        collection_name: MongoDB collection name
+        opendart_api_key: OpenDART API key for DART API access
+    
+    Properties:
+        mongodb_uri: Computed MongoDB connection URI (mongodb://{mongo_host}/)
+        mongodb_database: Alias for db_name
+        mongodb_collection: Alias for collection_name
+    
+    Example:
+        >>> config = get_app_config()
+        >>> config.db_name
+        'FS'
+        >>> config.collection_name
+        'A001'
+        >>> config.mongodb_uri
+        'mongodb://localhost:27017/'
+    """
+    
+    mongo_host: str = Field(
+        default="localhost:27017",
+        description="MongoDB host address"
+    )
+    
+    db_name: str = Field(
+        default="FS",
+        description="MongoDB database name"
+    )
+    
+    collection_name: str = Field(
+        default="A001",
+        description="MongoDB collection name for A001 (Annual Report) documents"
+    )
+    
+    opendart_api_key: Optional[str] = Field(
+        default=None,
+        description="OpenDART API key for accessing DART API"
+    )
+    
+    model_config = SettingsConfigDict(
+        env_file='.env',
+        env_file_encoding='utf-8',
+        case_sensitive=False,
+        extra='ignore'
+    )
+    
+    @property
+    def mongodb_uri(self) -> str:
+        """Construct MongoDB URI from host."""
+        return f"mongodb://{self.mongo_host}/"
+    
+    @property
+    def mongodb_database(self) -> str:
+        """Alias for db_name for backward compatibility."""
+        return self.db_name
+    
+    @property
+    def mongodb_collection(self) -> str:
+        """Alias for collection_name for backward compatibility."""
+        return self.collection_name
+
+
+# Singleton pattern - loaded once, cached forever
+_app_config: Optional[AppConfig] = None
+
+
+def get_app_config() -> AppConfig:
+    """
+    Get global application config instance (lazy-loaded singleton).
+    
+    Configuration is loaded from environment variables and .env file.
+    Cached after first access for efficiency.
+    
+    Returns:
+        Singleton AppConfig instance
+    
+    Example:
+        >>> config = get_app_config()
+        >>> config.mongodb_database
+        'FS'
+        >>> config2 = get_app_config()
+        >>> config is config2  # Same instance
+        True
+    """
+    global _app_config
+    if _app_config is None:
+        _app_config = AppConfig()
+    return _app_config
 
