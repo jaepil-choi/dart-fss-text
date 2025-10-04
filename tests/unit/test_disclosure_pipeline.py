@@ -464,6 +464,145 @@ class TestDisclosurePipelineErrorHandling:
         assert stats['failed'] == 1  # First failed
 
 
+class TestDownloadDocumentFunction:
+    """Test the download_document() helper function."""
+    
+    @patch('dart_fss_text.api.pipeline.DocumentDownloadService')
+    def test_download_document_success(self, mock_service_class):
+        """download_document should use DocumentDownloadService and return path."""
+        # Arrange
+        from dart_fss_text.api.pipeline import download_document
+        from dart_fss_text.services.document_download import DownloadResult
+        
+        mock_filing = Mock()
+        mock_filing.rcept_no = "20240312000736"
+        mock_filing.rcept_dt = "20240312"
+        mock_filing.corp_code = "00126380"
+        mock_filing.report_nm = "사업보고서"
+        
+        # Mock DocumentDownloadService
+        mock_service = Mock()
+        mock_service_class.return_value = mock_service
+        
+        mock_result = DownloadResult(
+            rcept_no="20240312000736",
+            rcept_dt="20240312",
+            stock_code="005930",
+            year="2024",
+            status='success',
+            xml_files=[Path("/fake/20240312000736.xml")],
+            main_xml_path=Path("/fake/20240312000736.xml")
+        )
+        mock_service.download_filing.return_value = mock_result
+        
+        # Act
+        result = download_document(mock_filing)
+        
+        # Assert
+        assert result == Path("/fake/20240312000736.xml")
+        mock_service.download_filing.assert_called_once_with(
+            rcept_no="20240312000736",
+            rcept_dt="20240312",
+            corp_code="00126380",
+            report_nm="사업보고서"
+        )
+    
+    @patch('dart_fss_text.api.pipeline.DocumentDownloadService')
+    def test_download_document_existing_file(self, mock_service_class):
+        """download_document should handle existing files correctly."""
+        # Arrange
+        from dart_fss_text.api.pipeline import download_document
+        from dart_fss_text.services.document_download import DownloadResult
+        
+        mock_filing = Mock()
+        mock_filing.rcept_no = "20240312000736"
+        mock_filing.rcept_dt = "20240312"
+        mock_filing.corp_code = "00126380"
+        
+        mock_service = Mock()
+        mock_service_class.return_value = mock_service
+        
+        # File already exists
+        mock_result = DownloadResult(
+            rcept_no="20240312000736",
+            rcept_dt="20240312",
+            stock_code="005930",
+            year="2024",
+            status='existing',
+            xml_files=[Path("/fake/20240312000736.xml")],
+            main_xml_path=Path("/fake/20240312000736.xml")
+        )
+        mock_service.download_filing.return_value = mock_result
+        
+        # Act
+        result = download_document(mock_filing)
+        
+        # Assert - should still return the path
+        assert result == Path("/fake/20240312000736.xml")
+    
+    @patch('dart_fss_text.api.pipeline.DocumentDownloadService')
+    def test_download_document_failed_status(self, mock_service_class):
+        """download_document should raise error on failed status."""
+        # Arrange
+        from dart_fss_text.api.pipeline import download_document
+        from dart_fss_text.services.document_download import DownloadResult
+        
+        mock_filing = Mock()
+        mock_filing.rcept_no = "20240312000736"
+        mock_filing.rcept_dt = "20240312"
+        mock_filing.corp_code = "00126380"
+        
+        mock_service = Mock()
+        mock_service_class.return_value = mock_service
+        
+        # Download failed
+        mock_result = DownloadResult(
+            rcept_no="20240312000736",
+            rcept_dt="20240312",
+            stock_code="005930",
+            year="2024",
+            status='failed',
+            xml_files=[],
+            error="Network error"
+        )
+        mock_service.download_filing.return_value = mock_result
+        
+        # Act & Assert
+        with pytest.raises(RuntimeError, match="Download failed: Network error"):
+            download_document(mock_filing)
+    
+    @patch('dart_fss_text.api.pipeline.DocumentDownloadService')
+    def test_download_document_no_main_xml(self, mock_service_class):
+        """download_document should raise error if main_xml_path is None."""
+        # Arrange
+        from dart_fss_text.api.pipeline import download_document
+        from dart_fss_text.services.document_download import DownloadResult
+        
+        mock_filing = Mock()
+        mock_filing.rcept_no = "20240312000736"
+        mock_filing.rcept_dt = "20240312"
+        mock_filing.corp_code = "00126380"
+        
+        mock_service = Mock()
+        mock_service_class.return_value = mock_service
+        
+        # Main XML not found
+        mock_result = DownloadResult(
+            rcept_no="20240312000736",
+            rcept_dt="20240312",
+            stock_code="005930",
+            year="2024",
+            status='success',
+            xml_files=[],
+            main_xml_path=None
+        )
+        mock_service.download_filing.return_value = mock_result
+        
+        # Act & Assert
+        with pytest.raises(FileNotFoundError, match="Main XML not found"):
+            download_document(mock_filing)
+
+
 class TestDisclosurePipelineStatistics:
     """Test statistics collection and reporting."""
     

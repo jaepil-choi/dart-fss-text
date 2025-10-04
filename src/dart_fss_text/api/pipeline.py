@@ -19,21 +19,53 @@ from pathlib import Path
 
 from dart_fss_text.services.storage_service import StorageService
 from dart_fss_text.services.filing_search import FilingSearchService
+from dart_fss_text.services.document_download import DocumentDownloadService
 from dart_fss_text.models.requests import SearchFilingsRequest
 
 logger = logging.getLogger(__name__)
 
 
-# Placeholder functions for download and parsing
-# These will be implemented properly in future phases
-def download_document(filing) -> Path:
+def download_document(filing, base_dir: str = "data") -> Path:
     """
-    Download DART filing document.
+    Download DART filing document using DocumentDownloadService.
     
-    TODO: Implement actual download logic.
-    Currently a placeholder for testing.
+    Args:
+        filing: Filing object from FilingSearchService
+        base_dir: Base directory for downloads (default: "data")
+    
+    Returns:
+        Path to main XML file
+    
+    Raises:
+        FileNotFoundError: If download or extraction fails
+        ValueError: If main XML not found in ZIP
+    
+    Example:
+        xml_path = download_document(filing)
+        # Returns: data/2024/005930/20240312000736/20240312000736.xml
     """
-    raise NotImplementedError("download_document not yet implemented")
+    service = DocumentDownloadService(base_dir=base_dir)
+    
+    result = service.download_filing(
+        rcept_no=filing.rcept_no,
+        rcept_dt=filing.rcept_dt,
+        corp_code=filing.corp_code,
+        report_nm=getattr(filing, 'report_nm', None)
+    )
+    
+    if result.status == 'failed':
+        raise RuntimeError(f"Download failed: {result.error}")
+    
+    if not result.main_xml_path:
+        raise FileNotFoundError(f"Main XML not found for {filing.rcept_no}")
+    
+    logger.info(
+        f"Downloaded {filing.rcept_no}: "
+        f"status={result.status}, "
+        f"files={len(result.xml_files)}"
+    )
+    
+    return result.main_xml_path
 
 
 def parse_xml_to_sections(xml_path: Path, filing) -> List:
