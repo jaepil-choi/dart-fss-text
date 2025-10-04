@@ -21,6 +21,10 @@ from dart_fss_text.services.storage_service import StorageService
 from dart_fss_text.services.filing_search import FilingSearchService
 from dart_fss_text.services.document_download import DocumentDownloadService
 from dart_fss_text.models.requests import SearchFilingsRequest
+from dart_fss_text.models.section import SectionDocument
+from dart_fss_text.config import get_toc_mapping
+from dart_fss_text.parsers.xml_parser import build_section_index, extract_section_by_code
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -68,14 +72,160 @@ def download_document(filing, base_dir: str = "data") -> Path:
     return result.main_xml_path
 
 
-def parse_xml_to_sections(xml_path: Path, filing) -> List:
+def parse_xml_to_sections(xml_path: Path, filing, report_type: str = "A001") -> List[SectionDocument]:
     """
-    Parse XML file to SectionDocument objects.
+    Parse XML file to SectionDocument objects using existing parsers.
     
-    TODO: Implement actual parsing logic.
-    Currently a placeholder for testing.
+    Args:
+        xml_path: Path to XML file
+        filing: Filing object with metadata
+        report_type: Report type code (default: "A001")
+    
+    Returns:
+        List of SectionDocument objects
+    
+    Raises:
+        Exception: If XML parsing fails
+    
+    Example:
+        sections = parse_xml_to_sections(xml_path, filing)
+        # Returns: [SectionDocument(...), SectionDocument(...), ...]
     """
-    raise NotImplementedError("parse_xml_to_sections not yet implemented")
+    # Load TOC mapping
+    toc_mapping = get_toc_mapping(report_type)
+    
+    # Build section index from XML
+    section_index = build_section_index(xml_path, toc_mapping)
+    
+    # Extract year from rcept_dt (YYYYMMDD -> YYYY)
+    year = filing.rcept_dt[:4]
+    
+    # Convert each section to SectionDocument
+    sections = []
+    for atocid, metadata in section_index.items():
+        section_code = metadata['section_code']
+        
+        # Skip unmapped sections
+        if not section_code:
+            logger.debug(f"Skipping unmapped section: {metadata['title']}")
+            continue
+        
+        # Extract section content
+        parsed_section = extract_section_by_code(section_index, section_code)
+        
+        if not parsed_section:
+            logger.warning(f"Failed to extract section {section_code}")
+            continue
+        
+        # Convert to SectionDocument
+        section_doc = _convert_to_section_document(
+            parsed_section=parsed_section,
+            filing=filing,
+            year=year
+        )
+        
+        sections.append(section_doc)
+        
+        logger.debug(
+            f"Parsed section {section_code}: "
+            f"{len(parsed_section.get('paragraphs', []))} paragraphs, "
+            f"{len(parsed_section.get('tables', []))} tables"
+        )
+    
+    logger.info(f"Parsed {len(sections)} sections from {xml_path.name}")
+    
+    return sections
+
+
+def _convert_to_section_document(
+    parsed_section: Dict,
+    filing,
+    year: str
+) -> SectionDocument:
+    """
+    Convert parsed section dictionary to SectionDocument model.
+    
+    Args:
+        parsed_section: Parsed section dictionary from extract_section_by_code
+        filing: Filing object with metadata
+        year: Year extracted from rcept_dt
+    
+    Returns:
+        SectionDocument object
+    """
+    # Flatten text: paragraphs + tables
+    text_parts = parsed_section.get('paragraphs', []).copy()
+    
+    # Flatten tables to text
+    for table in parsed_section.get('tables', []):
+        table_text = _flatten_table_to_text(table)
+        if table_text:
+            text_parts.append(table_text)
+    
+    # Join all text
+    full_text = '\n\n'.join(text_parts)
+    
+    # Calculate statistics
+    char_count = len(full_text)
+    word_count = len(full_text.split())
+    
+    # Build section_path (for hierarchy)
+    section_path = [parsed_section['section_code']]
+    
+    # Create composite document_id
+    document_id = f"{filing.rcept_no}_{parsed_section['section_code']}"
+    
+    # Get report name (with fallback)
+    report_name = getattr(filing, 'report_nm', 'Unknown Report')
+    
+    return SectionDocument(
+        document_id=document_id,
+        rcept_no=filing.rcept_no,
+        rcept_dt=filing.rcept_dt,
+        year=year,
+        corp_code=filing.corp_code,
+        corp_name=getattr(filing, 'corp_name', ''),
+        stock_code=getattr(filing, 'stock_code', filing.corp_code),
+        report_type="A001",  # TODO: Make dynamic
+        report_name=report_name,
+        section_code=parsed_section['section_code'],
+        section_title=parsed_section['title'],
+        level=parsed_section['level'],
+        atocid=parsed_section['atocid'],
+        parent_section_code=None,  # TODO: Implement parent detection
+        parent_section_title=None,
+        section_path=section_path,
+        text=full_text,
+        char_count=char_count,
+        word_count=word_count,
+        parsed_at=datetime.now(),
+        parser_version="0.1.0"
+    )
+
+
+def _flatten_table_to_text(table: Dict) -> str:
+    """
+    Flatten table structure to text for MVP.
+    
+    Args:
+        table: Table dictionary with headers and rows
+    
+    Returns:
+        Flattened text representation
+    """
+    parts = []
+    
+    # Add headers
+    headers = table.get('headers', [])
+    if headers:
+        parts.append(' | '.join(headers))
+    
+    # Add rows
+    for row in table.get('rows', []):
+        if row:
+            parts.append(' | '.join(str(cell) for cell in row))
+    
+    return '\n'.join(parts)
 
 
 class DisclosurePipeline:

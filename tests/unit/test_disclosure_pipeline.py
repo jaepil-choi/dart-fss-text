@@ -603,6 +603,354 @@ class TestDownloadDocumentFunction:
             download_document(mock_filing)
 
 
+class TestParseXmlToSectionsFunction:
+    """Test the parse_xml_to_sections() helper function."""
+    
+    @patch('dart_fss_text.api.pipeline.get_toc_mapping')
+    @patch('dart_fss_text.api.pipeline.build_section_index')
+    @patch('dart_fss_text.api.pipeline.extract_section_by_code')
+    def test_parse_xml_to_sections_basic(
+        self,
+        mock_extract,
+        mock_build_index,
+        mock_get_toc
+    ):
+        """parse_xml_to_sections should use existing parsers and convert to SectionDocument."""
+        # Arrange
+        from dart_fss_text.api.pipeline import parse_xml_to_sections
+        from pathlib import Path
+        
+        xml_path = Path("/fake/20240312000736.xml")
+        
+        mock_filing = Mock()
+        mock_filing.rcept_no = "20240312000736"
+        mock_filing.rcept_dt = "20240312"
+        mock_filing.corp_code = "00126380"
+        mock_filing.stock_code = "005930"
+        mock_filing.corp_name = "삼성전자"
+        mock_filing.report_nm = "사업보고서"
+        
+        # Mock TOC mapping
+        mock_get_toc.return_value = {"I. 회사의 개요": "010000"}
+        
+        # Mock section index with one section
+        mock_build_index.return_value = {
+            "3": {
+                'level': 1,
+                'title': 'I. 회사의 개요',
+                'section_code': '010000',
+                'atocid': '3',
+                'element': Mock()
+            }
+        }
+        
+        # Mock extracted section content
+        mock_extract.return_value = {
+            'title': 'I. 회사의 개요',
+            'section_code': '010000',
+            'level': 1,
+            'atocid': '3',
+            'paragraphs': ['회사 개요 내용입니다.'],
+            'tables': [],
+            'subsections': []
+        }
+        
+        # Act
+        sections = parse_xml_to_sections(xml_path, mock_filing)
+        
+        # Assert
+        assert len(sections) == 1
+        section = sections[0]
+        
+        # Verify it's a SectionDocument
+        from dart_fss_text.models.section import SectionDocument
+        assert isinstance(section, SectionDocument)
+        
+        # Verify metadata from filing
+        assert section.rcept_no == "20240312000736"
+        assert section.stock_code == "005930"
+        assert section.corp_name == "삼성전자"
+        
+        # Verify section data
+        assert section.section_code == "010000"
+        assert section.section_title == "I. 회사의 개요"
+        assert section.atocid == "3"
+        assert "회사 개요 내용입니다." in section.text
+    
+    @patch('dart_fss_text.api.pipeline.get_toc_mapping')
+    @patch('dart_fss_text.api.pipeline.build_section_index')
+    @patch('dart_fss_text.api.pipeline.extract_section_by_code')
+    def test_parse_xml_to_sections_multiple_sections(
+        self,
+        mock_extract,
+        mock_build_index,
+        mock_get_toc
+    ):
+        """parse_xml_to_sections should handle multiple sections."""
+        # Arrange
+        from dart_fss_text.api.pipeline import parse_xml_to_sections
+        from pathlib import Path
+        
+        xml_path = Path("/fake/20240312000736.xml")
+        mock_filing = Mock()
+        mock_filing.rcept_no = "20240312000736"
+        mock_filing.rcept_dt = "20240312"
+        mock_filing.corp_code = "00126380"
+        mock_filing.stock_code = "005930"
+        mock_filing.corp_name = "삼성전자"
+        mock_filing.report_nm = "사업보고서"
+        
+        mock_get_toc.return_value = {
+            "I. 회사의 개요": "010000",
+            "II. 사업의 내용": "020000"
+        }
+        
+        # Mock section index with two sections
+        mock_build_index.return_value = {
+            "3": {
+                'level': 1,
+                'title': 'I. 회사의 개요',
+                'section_code': '010000',
+                'atocid': '3',
+                'element': Mock()
+            },
+            "4": {
+                'level': 1,
+                'title': 'II. 사업의 내용',
+                'section_code': '020000',
+                'atocid': '4',
+                'element': Mock()
+            }
+        }
+        
+        # Mock extraction returns different content for each section
+        mock_extract.side_effect = [
+            {
+                'title': 'I. 회사의 개요',
+                'section_code': '010000',
+                'level': 1,
+                'atocid': '3',
+                'paragraphs': ['회사 개요'],
+                'tables': [],
+                'subsections': []
+            },
+            {
+                'title': 'II. 사업의 내용',
+                'section_code': '020000',
+                'level': 1,
+                'atocid': '4',
+                'paragraphs': ['사업 내용'],
+                'tables': [],
+                'subsections': []
+            }
+        ]
+        
+        # Act
+        sections = parse_xml_to_sections(xml_path, mock_filing)
+        
+        # Assert
+        assert len(sections) == 2
+        assert sections[0].section_code == "010000"
+        assert sections[1].section_code == "020000"
+    
+    @patch('dart_fss_text.api.pipeline.get_toc_mapping')
+    @patch('dart_fss_text.api.pipeline.build_section_index')
+    @patch('dart_fss_text.api.pipeline.extract_section_by_code')
+    def test_parse_xml_to_sections_skips_unmapped_sections(
+        self,
+        mock_extract,
+        mock_build_index,
+        mock_get_toc
+    ):
+        """parse_xml_to_sections should skip sections without section_code."""
+        # Arrange
+        from dart_fss_text.api.pipeline import parse_xml_to_sections
+        from pathlib import Path
+        
+        xml_path = Path("/fake/20240312000736.xml")
+        mock_filing = Mock()
+        mock_filing.rcept_no = "20240312000736"
+        mock_filing.rcept_dt = "20240312"
+        mock_filing.corp_code = "00126380"
+        mock_filing.stock_code = "005930"
+        mock_filing.corp_name = "삼성전자"
+        mock_filing.report_nm = "사업보고서"
+        
+        mock_get_toc.return_value = {"I. 회사의 개요": "010000"}
+        
+        # Mock section index with one mapped and one unmapped section
+        mock_build_index.return_value = {
+            "3": {
+                'level': 1,
+                'title': 'I. 회사의 개요',
+                'section_code': '010000',
+                'atocid': '3',
+                'element': Mock()
+            },
+            "4": {
+                'level': 1,
+                'title': 'Unknown Section',
+                'section_code': None,  # Unmapped
+                'atocid': '4',
+                'element': Mock()
+            }
+        }
+        
+        mock_extract.return_value = {
+            'title': 'I. 회사의 개요',
+            'section_code': '010000',
+            'level': 1,
+            'atocid': '3',
+            'paragraphs': ['회사 개요'],
+            'tables': [],
+            'subsections': []
+        }
+        
+        # Act
+        sections = parse_xml_to_sections(xml_path, mock_filing)
+        
+        # Assert - only mapped section returned
+        assert len(sections) == 1
+        assert sections[0].section_code == "010000"
+    
+    @patch('dart_fss_text.api.pipeline.get_toc_mapping')
+    @patch('dart_fss_text.api.pipeline.build_section_index')
+    @patch('dart_fss_text.api.pipeline.extract_section_by_code')
+    def test_parse_xml_to_sections_with_tables(
+        self,
+        mock_extract,
+        mock_build_index,
+        mock_get_toc
+    ):
+        """parse_xml_to_sections should handle sections with tables."""
+        # Arrange
+        from dart_fss_text.api.pipeline import parse_xml_to_sections
+        from pathlib import Path
+        
+        xml_path = Path("/fake/20240312000736.xml")
+        mock_filing = Mock()
+        mock_filing.rcept_no = "20240312000736"
+        mock_filing.rcept_dt = "20240312"
+        mock_filing.corp_code = "00126380"
+        mock_filing.stock_code = "005930"
+        mock_filing.corp_name = "삼성전자"
+        mock_filing.report_nm = "사업보고서"
+        
+        mock_get_toc.return_value = {"II. 사업의 내용": "020000"}
+        
+        mock_build_index.return_value = {
+            "4": {
+                'level': 1,
+                'title': 'II. 사업의 내용',
+                'section_code': '020000',
+                'atocid': '4',
+                'element': Mock()
+            }
+        }
+        
+        # Mock extraction with tables
+        mock_extract.return_value = {
+            'title': 'II. 사업의 내용',
+            'section_code': '020000',
+            'level': 1,
+            'atocid': '4',
+            'paragraphs': ['사업 내용'],
+            'tables': [
+                {
+                    'headers': ['구분', '매출액'],
+                    'rows': [['DX', '100억']]
+                }
+            ],
+            'subsections': []
+        }
+        
+        # Act
+        sections = parse_xml_to_sections(xml_path, mock_filing)
+        
+        # Assert
+        assert len(sections) == 1
+        section = sections[0]
+        # Tables should be flattened to text
+        assert 'DX' in section.text or '100억' in section.text
+    
+    @patch('dart_fss_text.api.pipeline.get_toc_mapping')
+    @patch('dart_fss_text.api.pipeline.build_section_index')
+    def test_parse_xml_to_sections_handles_parse_errors(
+        self,
+        mock_build_index,
+        mock_get_toc
+    ):
+        """parse_xml_to_sections should handle XML parsing errors gracefully."""
+        # Arrange
+        from dart_fss_text.api.pipeline import parse_xml_to_sections
+        from pathlib import Path
+        
+        xml_path = Path("/fake/malformed.xml")
+        mock_filing = Mock()
+        mock_filing.rcept_no = "20240312000736"
+        
+        mock_get_toc.return_value = {}
+        
+        # Mock build_section_index raises error
+        mock_build_index.side_effect = Exception("XML parsing error")
+        
+        # Act & Assert - should raise the error
+        with pytest.raises(Exception, match="XML parsing error"):
+            parse_xml_to_sections(xml_path, mock_filing)
+    
+    @patch('dart_fss_text.api.pipeline.get_toc_mapping')
+    @patch('dart_fss_text.api.pipeline.build_section_index')
+    @patch('dart_fss_text.api.pipeline.extract_section_by_code')
+    def test_parse_xml_to_sections_sets_year_from_rcept_dt(
+        self,
+        mock_extract,
+        mock_build_index,
+        mock_get_toc
+    ):
+        """parse_xml_to_sections should extract year from rcept_dt."""
+        # Arrange
+        from dart_fss_text.api.pipeline import parse_xml_to_sections
+        from pathlib import Path
+        
+        xml_path = Path("/fake/20240312000736.xml")
+        mock_filing = Mock()
+        mock_filing.rcept_no = "20240312000736"
+        mock_filing.rcept_dt = "20240312"  # Year should be 2024
+        mock_filing.corp_code = "00126380"
+        mock_filing.stock_code = "005930"
+        mock_filing.corp_name = "삼성전자"
+        mock_filing.report_nm = "사업보고서"
+        
+        mock_get_toc.return_value = {"I. 회사의 개요": "010000"}
+        
+        mock_build_index.return_value = {
+            "3": {
+                'level': 1,
+                'title': 'I. 회사의 개요',
+                'section_code': '010000',
+                'atocid': '3',
+                'element': Mock()
+            }
+        }
+        
+        mock_extract.return_value = {
+            'title': 'I. 회사의 개요',
+            'section_code': '010000',
+            'level': 1,
+            'atocid': '3',
+            'paragraphs': ['내용'],
+            'tables': [],
+            'subsections': []
+        }
+        
+        # Act
+        sections = parse_xml_to_sections(xml_path, mock_filing)
+        
+        # Assert
+        assert sections[0].year == "2024"
+        assert sections[0].rcept_dt == "20240312"
+
+
 class TestDisclosurePipelineStatistics:
     """Test statistics collection and reporting."""
     
