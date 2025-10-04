@@ -94,9 +94,84 @@
 - Statistics: char_count, word_count
 - Parsing metadata: parsed_at, parser_version
 
+---
+
+### Phase 6: Query Interface & Data Models ✅ (Complete)
+
+**Components Implemented:**
+- ✅ Model Layer (`models/metadata.py` with `ReportMetadata` - composition component)
+- ✅ Model Layer (`models/sequence.py` with `Sequence` - collection class)
+- ✅ API Layer (`api/query.py` with `TextQuery` - user-facing query interface)
+- ✅ Configuration Facade (`config.py` extended with `get_app_config()` and `get_toc_mapping()`)
+
+**Test Suite:**
+- 78 unit tests for Sequence (100% passing)
+- 45 unit tests for StorageService (100% passing)
+- Integration tests with live MongoDB
+- Total test count: 200+ tests across all phases
+
+**Key Design Decisions:**
+- **Composition over Inheritance**: `ReportMetadata` composed into `Sequence`, not inherited
+- **Dependency Injection**: `StorageService` injected into `TextQuery` for testability
+- **Universal Return Format**: `Dict[year][stock_code] → Sequence` for all research use cases
+- **No Wrapper Classes**: Plain dictionary return (no `QueryResult` wrapper)
+- **Config Facade Pattern**: All configuration accessed through `config.py` singleton
+
+**Query Interface Design:**
+```python
+# Initialize with injected StorageService
+storage = StorageService()  # User controls DB connection
+query = TextQuery(storage_service=storage)
+
+# Single method for all use cases
+result = query.get(
+    stock_codes=["005930", "000660"],
+    years=[2023, 2024],
+    section_codes="020100"
+)
+# Returns: {year: {stock_code: Sequence}}
+```
+
+**Research Use Cases Supported:**
+1. Single retrieval: Single firm, single year, specific section
+2. Cross-sectional: Multiple firms, single year (comparative analysis)
+3. Time-series: Single firm, multiple years (temporal analysis)
+4. Panel data: Multiple firms, multiple years (econometric models)
+
+**Key Findings:**
+- Composition pattern clearer than inheritance for collections with shared metadata
+- Dependency injection essential for testability (easy to mock `StorageService`)
+- Universal return structure simplifies API (same format for all use cases)
+- Config facade ensures single source of truth (no scattered `os.getenv()` calls)
+
+**Showcase Scripts:**
+- ✅ `showcase/showcase_01_text_query.py` - Sample data demonstration
+- ✅ `showcase/showcase_02_live_data_query.py` - Live DART data integration
+  - Downloads and parses Samsung (005930) and SK Hynix (000660) for 2023-2024
+  - Demonstrates all 4 research use cases with real MongoDB data
+  - Non-interactive (automated testing friendly)
+
+---
+
+### Phase 7: Pipeline Orchestrator (In Progress)
+
+**Planned Components:**
+- ⏳ `api/pipeline.py` - `DisclosurePipeline` orchestrator
+  - Takes `StorageService` as injected dependency (explicit DB control)
+  - `download_and_parse()` method for complete workflow
+  - Returns statistics dictionary: `{'reports': N, 'sections': M, 'failed': 0}`
+  - Coordinates `FilingSearchService`, XML parsing, and storage
+
+**Design Philosophy:**
+- Users establish database connection first (explicit control)
+- Inject `StorageService` into pipeline (testability)
+- Pipeline handles: search → download → parse → store
+- Returns statistics for monitoring and validation
+
 **Next Steps:**
-- Phase 2: Document Download implementation (production-ready)
-- Phase 6: End-to-End Pipeline Integration
+- Implement `DisclosurePipeline` class
+- Integrate all components (search, download, parse, store)
+- Update `showcase_02_live_data_query.py` to use pipeline
 - Performance optimization: Connection pooling, bulk operations
 
 ---
@@ -685,6 +760,87 @@ def parse_document(path: Path) -> Document:
 
 ---
 
+## Configuration Management
+
+### Config Facade Pattern
+
+All configuration is accessed through a centralized facade in `config.py` to ensure consistency and maintainability.
+
+**Design Principle**: Single source of truth for all configuration—no scattered `os.getenv()` calls or hardcoded paths.
+
+**Config Facade Components**:
+
+```python
+# src/dart_fss_text/config.py
+
+# 1. Application Config (from .env)
+class AppConfig(BaseSettings):
+    """Runtime configuration from environment variables."""
+    mongo_host: str = Field(default="localhost:27017")
+    db_name: str = Field(default="FS")
+    collection_name: str = Field(default="A001")
+    opendart_api_key: Optional[str] = None
+    
+    model_config = SettingsConfigDict(
+        env_file='.env',
+        case_sensitive=False
+    )
+    
+    @property
+    def mongodb_uri(self) -> str:
+        return f"mongodb://{self.mongo_host}/"
+
+# Singleton accessor
+def get_app_config() -> AppConfig:
+    """Get cached application config."""
+    ...
+
+# 2. TOC Mapping (from config/toc.yaml)
+def get_toc_mapping(report_type: str = 'A001') -> Dict[str, str]:
+    """Get cached TOC mapping for report type."""
+    ...
+
+# 3. Report Types Config (from config/types.yaml)
+def get_config() -> ReportTypesConfig:
+    """Get cached report types config."""
+    ...
+```
+
+**Usage Across Codebase**:
+
+```python
+# ✅ CORRECT: Use config facade
+from dart_fss_text.config import get_app_config, get_toc_mapping
+
+config = get_app_config()
+storage = StorageService(
+    mongo_uri=config.mongodb_uri,
+    database=config.mongodb_database,
+    collection=config.mongodb_collection
+)
+
+toc = get_toc_mapping('A001')
+section_code = toc.get('I. 회사의 개요')
+```
+
+```python
+# ❌ WRONG: Direct environment variable access
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+mongo_uri = os.getenv("MONGODB_URI")  # Scattered, inconsistent
+```
+
+**Benefits**:
+- ✅ Single source of truth (no duplicate loading logic)
+- ✅ Consistent access pattern across codebase
+- ✅ Easier testing (mock `get_app_config()` instead of `os.getenv()`)
+- ✅ Caching (singleton pattern prevents redundant file reads)
+- ✅ Type safety (Pydantic validation)
+
+---
+
 ## Parameter Validation & Discovery
 
 ### Specification-Based Validation with Pydantic Settings
@@ -1237,7 +1393,7 @@ jobs:
 
 ---
 
-**Last Updated**: 2025-10-03  
-**Version**: 1.1  
-**Status**: Active Development (Phase 1 Complete)
+**Last Updated**: 2025-10-04  
+**Version**: 1.2  
+**Status**: Active Development (Phase 7 in progress - Pipeline Orchestrator)
 
