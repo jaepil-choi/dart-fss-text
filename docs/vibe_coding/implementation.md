@@ -22,10 +22,82 @@
   - Validates ~7s initial load, instant subsequent calls
   - Confirms 114,147 total companies, 3,901 listed
 
+---
+
+### Phase 4: XML Parsing & Section Extraction ✅ (Complete)
+
+**Components Implemented:**
+- ✅ TOC Mapping (`config/toc.yaml` - 123 section definitions)
+- ✅ Model Layer (`models/section.py` with `SectionDocument` Pydantic model)
+- ✅ Parser Layer (`parsers/xml_parser.py` - Low-level XML utilities)
+- ✅ Parser Layer (`parsers/section_parser.py` - Section extraction & hierarchy)
+- ✅ Parser Layer (`parsers/table_parser.py` - Table parsing)
+
+**Test Suite:**
+- 34 unit tests (100% passing)
+- Tests cover: TOC mapping, section indexing, extraction, hierarchy reconstruction
+- Critical validations: ATOCID extraction, flat XML structure handling, content parsing
+
+**Key Experiments:**
+- ✅ `exp_10_xml_structure_exploration.py` - XML structure validation
+  - Discovered ATOCID on TITLE tag (not SECTION)
+  - Discovered flat XML structure (programmatic hierarchy reconstruction)
+  - Validated on-demand parsing strategy
+  - Performance: 0.167s indexing (155K lines), 0.010s extraction
+
+**Key Findings:**
+- XML structure is flat (siblings, not nested) - hierarchy reconstructed from ATOCID sequence
+- Only SECTION-1 and SECTION-2 exist (maximum depth: 2 levels)
+- Must use `.//P` and `.//TABLE` for recursive content extraction
+- Coverage: 39.8% (49/123 sections) - many toc.yaml sections are optional
+
+---
+
+### Phase 5: MongoDB Storage Layer ✅ (Complete)
+
+**Components Implemented:**
+- ✅ Model Layer (`models/section.py` with `SectionDocument` - Pydantic validation)
+- ✅ Service Layer (`services/storage_service.py` with `StorageService`)
+  - Environment-based configuration (MONGODB_URI, MONGODB_DATABASE, MONGODB_COLLECTION)
+  - Full CRUD operations (insert, get, delete, upsert)
+  - Query helpers (by company, by section code, by year)
+  - Index management for performance
+  - Context manager support
+
+**Test Suite:**
+- 23 unit tests (100% passing, mocked MongoDB)
+- 22 integration tests (100% passing, requires MongoDB)
+- Total: 45 tests, ~2.5s execution time
+- Coverage: Initialization, CRUD operations, queries, error handling
+
+**Key Experiments:**
+- ✅ `exp_11_mongodb_storage.py` - Schema design and storage validation
+  - Validated flat document structure (one doc per section)
+  - Tested Pydantic validation and conversion
+  - Verified MongoDB connection and operations
+  - Performance: <2s total workflow (parse + store + verify)
+
+**Key Findings:**
+- Flat document structure superior to nested (easier queries, better indexing)
+- Composite document_id enables idempotent inserts
+- Shared metadata (denormalization) enables efficient time-series queries
+- Text flattening sufficient for MVP (structured tables can come later)
+- PyMongo collection truthiness issue (use `is None` checks)
+- Numerical sorting of atocid required (MongoDB sorts strings alphabetically)
+
+**Schema Design:**
+- One document per section (flat, not nested)
+- Composite document_id: `{rcept_no}_{section_code}`
+- Shared metadata: rcept_no, corp_code, stock_code, year
+- Hierarchy: parent_section_code, section_path array
+- Text-only content (paragraphs + tables flattened)
+- Statistics: char_count, word_count
+- Parsing metadata: parsed_at, parser_version
+
 **Next Steps:**
-- Begin Phase 2: Document Download implementation
-- Create `services/download_service.py`
-- Design PIT-aware filesystem caching strategy
+- Phase 2: Document Download implementation (production-ready)
+- Phase 6: End-to-End Pipeline Integration
+- Performance optimization: Connection pooling, bulk operations
 
 ---
 
