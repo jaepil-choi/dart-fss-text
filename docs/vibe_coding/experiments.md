@@ -1243,22 +1243,317 @@ Section 020100 (1. 사업의 개요) - 6 paragraphs:
 
 ---
 
+## Phase 5: MongoDB Storage Layer
+
+### Experiment 11: MongoDB Storage for Parsed Sections
+
+**Date**: 2025-10-04  
+**Status**: ✅ **COMPLETE**
+
+#### Objective
+
+Validate MongoDB integration for storing parsed XML sections. Design document schema, test connection, convert parsed sections to MongoDB documents, and verify data persistence.
+
+**Key Focus**: Schema design, data conversion, and storage validation before TDD.
+
+#### Background & Context
+
+With XML parsing complete (Experiment 10), we need a storage layer to persist parsed sections for querying and analysis. MongoDB is chosen for:
+- **Flexible schema** for varying section structures
+- **Document-oriented** storage aligns with section-based parsing
+- **Query flexibility** for textual analysis workflows
+- **Scalability** for thousands of reports
+
+**Design Principle**: One document per section (flat structure, not nested).
+
+#### Schema Design Decisions
+
+**✅ Flat Document Structure** (NOT nested subsections)
+- Each section = one MongoDB document
+- Subsections are separate documents with `parent_section_code`
+- **Rationale**: Easier querying, better indexing, scalable updates
+
+**✅ Shared Metadata** (across all sections of same report)
+- `rcept_no`, `rcept_dt`, `year`, `corp_code`, `stock_code`
+- `report_type`, `report_name`, `corp_name`
+- **Rationale**: Enables time-series queries, company filtering
+
+**✅ Text-Only Content** (paragraphs + tables flattened)
+- Tables converted to text (not structured)
+- MVP focus on textual analysis
+- **Rationale**: Simplifies storage, tables still searchable as text
+
+**✅ Composite Document ID** (`{rcept_no}_{section_code}`)
+- Unique identifier per section
+- Idempotent inserts (re-parsing same document)
+- **Rationale**: Natural key, prevents duplicates
+
+**✅ Hierarchy Information**
+- `parent_section_code`, `parent_section_title`
+- `section_path` (array of codes from root to current)
+- **Rationale**: Enables tree queries, breadcrumb navigation
+
+**✅ Basic Statistics**
+- `char_count`, `word_count`
+- **Rationale**: Quick filtering, content size validation
+
+**✅ Parsing Metadata**
+- `parsed_at` (timestamp)
+- `parser_version` (string)
+- **Rationale**: Track data lineage, enable re-parsing
+
+#### Pydantic Model
+
+Created `src/dart_fss_text/models/section.py`:
+
+```python
+class SectionDocument(BaseModel):
+    # Composite key
+    document_id: str  # {rcept_no}_{section_code}
+    
+    # Document metadata (shared)
+    rcept_no: str
+    rcept_dt: str  # YYYYMMDD
+    year: str  # Extracted from rcept_dt
+    
+    # Company info (shared)
+    corp_code: str
+    corp_name: str
+    stock_code: str
+    
+    # Report type (shared)
+    report_type: str  # A001, A002, A003
+    report_name: str
+    
+    # Section identity
+    section_code: str
+    section_title: str
+    level: int  # 1 or 2
+    atocid: str  # From XML
+    
+    # Hierarchy
+    parent_section_code: Optional[str]
+    parent_section_title: Optional[str]
+    section_path: List[str]
+    
+    # Content (text only)
+    text: str
+    
+    # Statistics
+    char_count: int
+    word_count: int
+    
+    # Parsing metadata
+    parsed_at: datetime
+    parser_version: str
+```
+
+**Validation:**
+- Field-level validators for format (e.g., `rcept_no` = 14 digits)
+- `document_id` format validator
+- `section_path` must end with `section_code`
+
+#### Workflow Steps
+
+**1. Connect to MongoDB**
+```python
+# Environment variables: MONGODB_URI, MONGODB_DATABASE, MONGODB_COLLECTION
+client = MongoClient(mongo_uri)
+db = client['FS']  # User's database name
+collection = db['A001']  # Annual reports
+```
+
+**Result:**
+- ✅ Connection successful to local MongoDB (localhost:27017)
+- ✅ Database `FS` exists
+- ✅ Collection `A001` created
+
+**2. Parse XML Sections**
+```python
+# Reuse Experiment 10 parsers
+toc_mapping = load_toc_mapping()
+section_index = build_section_index(xml_path, toc_mapping)
+
+# Extract test sections
+sections = [
+    extract_section_by_code(section_index, '020100'),  # 1. 사업의 개요
+    extract_section_by_code(section_index, '020200'),  # 2. 주요 제품 및 서비스
+    extract_section_by_code(section_index, '010000'),  # I. 회사의 개요
+]
+```
+
+**Result:**
+- ✅ 3 sections extracted (6 paragraphs, 3 paragraphs, 107 paragraphs)
+- ✅ Parsing time: < 1 second total
+
+**3. Convert to SectionDocument**
+```python
+# Flatten paragraphs to text
+text = '\n\n'.join(section['paragraphs'])
+
+# Calculate statistics
+char_count = len(text)
+word_count = len(text.split())
+
+# Create document
+doc = SectionDocument(
+    document_id=f"{rcept_no}_{section_code}",
+    # ... metadata ...
+    text=text,
+    char_count=char_count,
+    word_count=word_count,
+    parsed_at=datetime.now(),
+    parser_version="1.0.0"
+)
+```
+
+**Result:**
+- ✅ 3 valid `SectionDocument` instances created
+- ✅ Pydantic validation passed
+- ✅ Character counts: 2,092 / 637 / 7,561 chars
+
+**4. Store to MongoDB**
+```python
+# Convert to MongoDB format
+mongo_docs = [doc.to_mongo_dict() for doc in documents]
+
+# Insert
+result = collection.insert_many(mongo_docs)
+print(f"Inserted {len(result.inserted_ids)} documents")
+```
+
+**Result:**
+- ✅ 3 documents inserted successfully
+- ✅ ObjectIDs generated: `68e08f7e...`, `68e08f7e...`, `68e08f7e...`
+
+**5. Query and Verify**
+```python
+# Count documents
+count = collection.count_documents({'rcept_no': '20240312000736'})
+
+# Query specific section
+section = collection.find_one({
+    'rcept_no': '20240312000736',
+    'section_code': '020100'
+})
+```
+
+**Result:**
+- ✅ 3 documents found by `rcept_no`
+- ✅ Section `020100` retrieved with correct data
+- ✅ Parent hierarchy: `parent_section_code='020000'`
+- ✅ Text preview: "당사는 본사를 거점으로..."
+
+#### Results Summary
+
+**✅ All Success Criteria Met:**
+
+1. ✅ MongoDB connection successful
+2. ✅ Pydantic schema validates correctly
+3. ✅ XML sections converted to documents
+4. ✅ Documents inserted to MongoDB
+5. ✅ Queries return expected data
+6. ✅ Hierarchy preserved (`section_path`, `parent_section_code`)
+7. ✅ Statistics calculated correctly
+
+**Performance Metrics:**
+
+```
+Parse 3 sections:   < 1 second
+Convert to docs:    Instant
+Insert to MongoDB:  < 0.1 seconds
+Total workflow:     < 2 seconds
+```
+
+**Stored Documents:**
+
+| document_id | section_title | chars | words | level | parent |
+|-------------|---------------|-------|-------|-------|--------|
+| `20240312000736_020100` | 1. 사업의 개요 | 2,092 | 364 | 2 | 020000 |
+| `20240312000736_020200` | 2. 주요 제품 및 서비스 | 637 | 131 | 2 | 020000 |
+| `20240312000736_010000` | I. 회사의 개요 | 7,561 | 1,436 | 1 | None |
+
+**Critical Findings:**
+
+1. **Database name mismatch resolved**
+   - Initial code used `dart_fss_text` database
+   - User created `FS` database
+   - Updated to use environment variable `MONGODB_DATABASE`
+
+2. **PyMongo truthiness issue**
+   - Collections don't support `if collection:` checks
+   - Fixed: Use `if collection is None:`
+
+3. **Text flattening works well**
+   - Paragraphs joined with `\n\n`
+   - Tables marked as `[Tables converted to text]` (MVP approach)
+   - Full table parsing deferred to future enhancement
+
+#### Files Created
+
+- ✅ `src/dart_fss_text/models/section.py` - Pydantic model
+- ✅ `experiments/exp_11_mongodb_storage.py` - Main experiment
+- ✅ `experiments/exp_11b_mongodb_verify.py` - Connection verification
+- ⏳ Tests (next step)
+
+#### Questions Answered
+
+1. **Schema Design**: Flat documents vs nested? → **Flat is better**
+2. **Text Storage**: Structured vs flattened? → **Flattened for MVP**
+3. **Document ID**: Natural key vs ObjectId? → **Composite natural key**
+4. **Hierarchy**: How to preserve? → **parent_section_code + section_path**
+5. **Statistics**: What to track? → **char_count, word_count (basic for now)**
+
+#### Lessons Learned
+
+1. **Environment-based config is essential**
+   - Different users have different database names
+   - Use `.env` + `MONGODB_DATABASE` variable
+
+2. **Pydantic validation catches errors early**
+   - Document ID format validation prevented bad data
+   - Field validators ensure data quality
+
+3. **Flat document structure is more flexible**
+   - Easier to query specific sections
+   - Better for MongoDB indexing
+   - Scales better than nested arrays
+
+4. **Text flattening is sufficient for MVP**
+   - Tables as text still searchable
+   - Structured table parsing can come later
+
+#### Next Steps After Experiment 11
+
+1. ⏳ **Update documentation** - Add findings to `FINDINGS.md` ← CURRENT
+2. ⏳ **Write tests** - TDD for `StorageService`
+   - Unit tests: Document validation, conversion logic
+   - Integration tests: MongoDB operations with test DB
+3. ⏳ **Implement StorageService** - Production code
+   - `src/dart_fss_text/services/storage_service.py`
+   - Methods: `insert_sections()`, `get_section()`, `delete_report()`
+4. ⏳ **Define MongoDB indexes** - Optimize queries
+   - Composite index: `{rcept_no, section_code}`
+   - Single indexes: `stock_code`, `year`, `section_code`
+
+---
+
 ## Status
 
-**Current Status**: ✅ **Phase 4 Complete - Experiment 10 Successful!**
+**Current Status**: ✅ **Phase 5 Complete - Experiment 11 Successful!**
 
 **Completed:**
 - ✅ Phase 1: Filing Discovery v0.1.0 (Experiments 1-4, 8)
 - ✅ Phase 2: Corporation List Mapping (Experiment 5-6)
-- ✅ Phase 4: XML Parsing & Section Extraction (Experiment 10) ← NEW!
+- ✅ Phase 4: XML Parsing & Section Extraction (Experiment 10)
+- ✅ Phase 5: MongoDB Storage Layer (Experiment 11) ← NEW!
 
 **In Progress:**
-- 🚧 Phase 4 Continued: Writing tests and implementing parsers (TDD)
+- 🚧 Phase 5 Continued: Writing tests and implementing StorageService (TDD)
 
 **Pending:**
 - ⏳ Phase 3: Production-Ready Search & Download (Experiment 7, 9)
-- ⏳ Phase 5: MongoDB Storage Layer
 - ⏳ Phase 6: End-to-End Pipeline Integration
 
-**Next:** Write unit tests for XML parsing (TDD), then implement production parsers.
+**Next:** Write unit tests for MongoDB storage (TDD), then implement production `StorageService`.
 

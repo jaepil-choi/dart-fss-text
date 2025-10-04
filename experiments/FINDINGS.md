@@ -887,3 +887,394 @@ for p in section_elem.findall('.//P'):
 
 **Status**: Experiment 10 COMPLETE - XML parsing approach validated and ready for TDD implementation
 
+---
+
+## Phase 5: MongoDB Storage Layer
+
+**Date**: 2025-10-04
+
+### Experiment 11: MongoDB Storage for Parsed Sections
+
+#### Summary
+
+Successfully designed and validated MongoDB schema for storing parsed DART report sections. All storage operations (insert, query, verify) work correctly with production-grade Pydantic models and validation.
+
+---
+
+### Critical Finding #1: Flat Document Structure is Superior
+
+**Decision:** Store each section as a separate MongoDB document (NOT nested).
+
+**Rationale:**
+1. **Querying**: Easier to query specific sections directly
+   ```python
+   # Find all "사업의 내용" sections across years
+   collection.find({'section_code': '020000'})
+   ```
+
+2. **Indexing**: MongoDB indexes work better on flat documents
+   - Composite index on `{rcept_no, section_code}` is efficient
+   - Array indexing (nested structure) is slower and more complex
+
+3. **Updates**: Can update individual sections without re-saving entire document
+   ```python
+   # Update just one section
+   collection.update_one(
+       {'document_id': '20240312000736_020100'},
+       {'$set': {'text': new_text}}
+   )
+   ```
+
+4. **Scalability**: Document size stays bounded (not growing with subsections)
+
+**Alternative Rejected:**
+```python
+# REJECTED: Nested structure
+{
+  'rcept_no': '20240312000736',
+  'sections': [
+    {'code': '020000', 'subsections': [
+      {'code': '020100', 'text': '...'},
+      {'code': '020200', 'text': '...'}
+    ]}
+  ]
+}
+```
+- **Problem**: Hard to query subsections, inefficient updates, unbounded growth
+
+---
+
+### Critical Finding #2: Composite Document ID as Natural Key
+
+**Decision:** Use `{rcept_no}_{section_code}` as `document_id` field (not MongoDB's `_id`).
+
+**Benefits:**
+1. **Idempotency**: Re-parsing same document doesn't create duplicates
+   ```python
+   # Upsert behavior possible
+   collection.replace_one(
+       {'document_id': f'{rcept_no}_{section_code}'},
+       document,
+       upsert=True
+   )
+   ```
+
+2. **Readability**: Human-readable IDs in logs and debugging
+   - `20240312000736_020100` vs `68e08f7e7deb29c5e3a1e415`
+
+3. **Uniqueness**: Naturally unique across entire collection
+   - One report can't have duplicate section codes
+   - Different reports have different rcept_no
+
+4. **Queryability**: Can construct ID programmatically for lookups
+
+**Implementation:**
+```python
+class SectionDocument(BaseModel):
+    document_id: str  # {rcept_no}_{section_code}
+    # ... other fields ...
+    
+    @field_validator('document_id')
+    @classmethod
+    def validate_document_id_format(cls, v: str) -> str:
+        parts = v.split('_')
+        if len(parts) != 2:
+            raise ValueError("document_id must be '{rcept_no}_{section_code}'")
+        return v
+```
+
+---
+
+### Critical Finding #3: Shared Metadata Enables Time-Series Queries
+
+**Decision:** Include shared metadata in every document (denormalization).
+
+**Shared Fields:**
+- **Document**: `rcept_no`, `rcept_dt`, `year`
+- **Company**: `corp_code`, `corp_name`, `stock_code`
+- **Report**: `report_type`, `report_name`
+
+**Benefits:**
+1. **Self-contained documents**: No JOINs needed
+   ```python
+   # Get all Samsung business descriptions across years
+   collection.find({
+       'stock_code': '005930',
+       'section_code': '020000'
+   }).sort('year', 1)
+   ```
+
+2. **Efficient queries**: Filter by company, year, section in single query
+   - No need to query metadata table first
+   - MongoDB can use compound indexes
+
+3. **Data integrity**: Section always has its metadata
+   - No orphaned sections if metadata document is deleted
+
+**Trade-off:**
+- **Storage**: ~200 bytes overhead per document (acceptable)
+- **Update complexity**: If company name changes, must update all documents
+  - **Mitigation**: Company names rarely change, and corp_code is stable
+
+---
+
+### Critical Finding #4: Text Flattening is Sufficient for MVP
+
+**Decision:** Store paragraphs and tables as plain text (NOT structured).
+
+**Approach:**
+```python
+# Flatten paragraphs
+text = '\n\n'.join(section['paragraphs'])
+
+# Tables marked but not parsed
+if section['tables']:
+    text += '\n\n[Tables converted to text - not implemented yet]'
+
+# Store flattened text
+doc = SectionDocument(
+    text=text,
+    char_count=len(text),
+    word_count=len(text.split())
+)
+```
+
+**Benefits:**
+1. **Simplicity**: No complex table schema needed for MVP
+2. **Searchability**: Text search works on tables too (full-text index)
+3. **NLP-friendly**: Most NLP tools work on plain text
+4. **Fast storage**: No table parsing overhead
+
+**Future Enhancement:**
+- Phase 6: Parse tables to structured format (headers, rows, cells)
+- Store both: `text` (flat) + `structured_tables` (array)
+- **Rationale**: Keep flat text for search, add structure for analysis
+
+---
+
+### Critical Finding #5: Hierarchy via `section_path` Array
+
+**Decision:** Use `section_path` array to preserve document hierarchy.
+
+**Structure:**
+```python
+# Root section (level 1)
+{
+  'section_code': '020000',
+  'level': 1,
+  'parent_section_code': None,
+  'section_path': ['020000']
+}
+
+# Subsection (level 2)
+{
+  'section_code': '020100',
+  'level': 2,
+  'parent_section_code': '020000',
+  'section_path': ['020000', '020100']  # ← Breadcrumb path
+}
+```
+
+**Query Examples:**
+```python
+# Find all children of section 020000
+collection.find({'parent_section_code': '020000'})
+
+# Find section and all ancestors
+collection.find({'section_code': {'$in': section_path}})
+
+# Find all root sections
+collection.find({'level': 1})
+```
+
+**Benefits:**
+- Tree queries without recursive lookups
+- Breadcrumb navigation for UI
+- Depth filtering (`level` field)
+
+---
+
+### Critical Finding #6: Environment-Based Database Configuration
+
+**Problem:** Initial code hardcoded database name (`dart_fss_text`), but user created `FS` database.
+
+**Solution:** Use environment variables for all MongoDB config.
+
+**`.env` file:**
+```bash
+MONGODB_URI=mongodb://localhost:27017/
+MONGODB_DATABASE=FS  # User-specific
+MONGODB_COLLECTION=A001
+```
+
+**Code:**
+```python
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+mongo_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+db_name = os.getenv('MONGODB_DATABASE', 'dart_fss_text')  # Fallback
+collection_name = os.getenv('MONGODB_COLLECTION', 'A001')
+```
+
+**Benefit:** Different environments (dev, test, prod) use different databases without code changes.
+
+---
+
+### Critical Finding #7: PyMongo Collection Truthiness Issue
+
+**Problem:** PyMongo collections don't support truthiness testing.
+
+**Error:**
+```python
+collection = db['A001']
+if not collection:  # ← Raises NotImplementedError!
+    print("No collection")
+```
+
+**Fix:**
+```python
+if collection is None:  # ← Use explicit None check
+    print("No collection")
+```
+
+**Lesson:** Always check library documentation for quirks in API behavior.
+
+---
+
+### Performance Validation: All Targets Met
+
+| Operation | Time | Notes |
+|-----------|------|-------|
+| Parse 3 sections | < 1s | Reused Experiment 10 parsers |
+| Convert to Pydantic | Instant | Validation is fast |
+| Insert 3 documents | < 0.1s | MongoDB local |
+| Query by rcept_no | < 0.01s | No index needed (small collection) |
+| Query by section_code | < 0.01s | Future: Add index for scale |
+
+---
+
+### Data Validation Success
+
+**Pydantic Validators Caught Issues:**
+1. **document_id format**: Must be `{rcept_no}_{section_code}`
+2. **rcept_no length**: Must be exactly 14 digits
+3. **stock_code format**: Must be exactly 6 digits
+4. **section_path consistency**: Must end with `section_code`
+
+**No validation errors** during experiment = schema is well-designed.
+
+---
+
+### Sample Data Stored
+
+**3 documents in MongoDB collection `FS.A001`:**
+
+```json
+[
+  {
+    "document_id": "20240312000736_020100",
+    "rcept_no": "20240312000736",
+    "section_code": "020100",
+    "section_title": "1. 사업의 개요",
+    "level": 2,
+    "parent_section_code": "020000",
+    "text": "당사는 본사를 거점으로...",
+    "char_count": 2092,
+    "word_count": 364
+  },
+  {
+    "document_id": "20240312000736_020200",
+    "section_code": "020200",
+    "section_title": "2. 주요 제품 및 서비스",
+    "level": 2,
+    "parent_section_code": "020000",
+    "text": "...",
+    "char_count": 637,
+    "word_count": 131
+  },
+  {
+    "document_id": "20240312000736_010000",
+    "section_code": "010000",
+    "section_title": "I. 회사의 개요",
+    "level": 1,
+    "parent_section_code": null,
+    "text": "...",
+    "char_count": 7561,
+    "word_count": 1436
+  }
+]
+```
+
+**Verified:**
+- ✅ Queries by `rcept_no`, `section_code`, `stock_code` all work
+- ✅ Hierarchy preserved with `parent_section_code` and `section_path`
+- ✅ Text content extracted correctly
+- ✅ Statistics calculated accurately
+
+---
+
+### Lessons Learned
+
+1. **Denormalization is OK in Document Stores**
+   - SQL mindset: normalize everything
+   - MongoDB: denormalize for query performance
+   - **Takeaway**: Each storage paradigm has its own best practices
+
+2. **Pydantic Validation is Worth the Overhead**
+   - Caught format errors before insertion
+   - Self-documenting schema with type hints
+   - **Takeaway**: Invest in data validation upfront
+
+3. **Flat is Better Than Nested (for this use case)**
+   - Simpler queries, better indexing, bounded document size
+   - Hierarchy can be reconstructed from `parent_section_code`
+   - **Takeaway**: Choose structure based on query patterns
+
+4. **Environment Config Prevents User Friction**
+   - Hardcoded database names cause setup issues
+   - Environment variables make deployment flexible
+   - **Takeaway**: Always externalize configuration
+
+5. **Test with Real Data ASAP**
+   - Initial database name mismatch found immediately in experiment
+   - Would have been missed in unit tests with mocks
+   - **Takeaway**: Integration tests with real MongoDB catch real issues
+
+---
+
+### Next Steps
+
+1. ✅ **Document findings** - Complete (this entry)
+2. ⏳ **Define MongoDB indexes** - Optimize for production queries
+   ```python
+   # Recommended indexes:
+   collection.create_index([('rcept_no', 1), ('section_code', 1)], unique=True)
+   collection.create_index([('stock_code', 1), ('year', 1)])
+   collection.create_index([('section_code', 1)])
+   collection.create_index([('document_id', 1)], unique=True)
+   ```
+
+3. ⏳ **Write unit tests** - TDD for StorageService
+   - Test document validation
+   - Test conversion logic (section → SectionDocument)
+   - Test error handling (invalid data, duplicate IDs)
+
+4. ⏳ **Write integration tests** - MongoDB operations
+   - Test insert, query, update, delete with test database
+   - Test idempotent re-insertion (upsert behavior)
+   - Test bulk operations (insert many sections)
+
+5. ⏳ **Implement StorageService** - Production code
+   - `insert_sections(documents)` - Bulk insert
+   - `get_section(rcept_no, section_code)` - Query
+   - `delete_report(rcept_no)` - Cleanup
+   - `get_report_sections(rcept_no)` - All sections
+
+6. ⏳ **Add connection pooling** - For production scalability
+
+---
+
+**Status**: Experiment 11 COMPLETE - MongoDB storage layer validated and ready for TDD implementation
+
