@@ -13,10 +13,12 @@ from dart_fss_text.services.document_download import (
     DocumentDownloadService,
     DownloadResult
 )
+from dart_fss_text.services.storage_service import StorageService
 
 __all__ = [
     'FilingSearchService',
     'DocumentDownloadService',
-    'DownloadResult'
+    'DownloadResult',
+    'StorageService'
 ]
 
