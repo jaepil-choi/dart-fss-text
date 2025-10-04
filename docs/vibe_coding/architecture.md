@@ -238,103 +238,192 @@ print(ReportTypes.get_description('A001'))  # "사업보고서"
 
 ### Core Domain Classes
 
+#### 1. **SectionDocument** (MongoDB Model)
+The primary data model representing a single section stored in MongoDB. Defined in `models/section.py` using Pydantic for validation.
+
 ```python
-from dataclasses import dataclass
-from typing import List, Dict, Optional
-from pathlib import Path
+from pydantic import BaseModel, Field
 from datetime import datetime
-import pandas as pd
+from typing import Optional, List
 
-@dataclass
-class Section:
+class SectionDocument(BaseModel):
     """
-    Represents a major section in a financial statement.
+    MongoDB document schema for DART report sections.
     
-    Attributes:
-        name: Semantic section name (e.g., "주요 사업의 내용")
-        usermark: DART XML marker (e.g., "F-14 B")
-        text: Cleaned, concatenated text content
-        paragraphs: Individual paragraphs preserving structure
-        tables: Embedded tables within this section
-        subsections: Hierarchical children (for nested sections)
-        metadata: Additional info (page numbers, raw XML snippet, etc.)
-    """
-    name: str
-    usermark: str
-    text: str
-    paragraphs: List[str]
-    tables: List['Table']
-    subsections: List['Section']
-    metadata: Dict[str, any]
-
-
-@dataclass
-class Table:
-    """
-    Structured representation of a financial table.
+    Each section is stored as a separate document with:
+    - Document metadata (rcept_no, dates, company info)
+    - Section identity (code, title, level)
+    - Hierarchy info (parent, path)
+    - Text content (paragraphs + tables flattened to text)
+    - Statistics and parsing metadata
     
-    Attributes:
-        headers: Column headers
-        rows: Data rows (each row is a list of cell values)
-        context: Surrounding text for semantic context
+    Design Rationale:
+    - Flat structure (one document per section) for query performance
+    - Denormalized metadata (shared across all sections) for time-series queries
+    - Text-only content (tables flattened) for MVP simplicity
+    - Composite document_id as natural key: {rcept_no}_{section_code}
     """
-    headers: List[str]
-    rows: List[List[str]]
-    context: str
     
-    def to_dataframe(self) -> pd.DataFrame:
-        """Convert to pandas DataFrame for analysis."""
-        return pd.DataFrame(self.rows, columns=self.headers)
+    # Composite Key
+    document_id: str = Field(..., description="Unique ID: {rcept_no}_{section_code}")
     
-    def to_dict(self) -> Dict:
-        """Convert to dictionary for MongoDB storage."""
-        return {
-            "headers": self.headers,
-            "rows": self.rows,
-            "context": self.context
-        }
-
-
-@dataclass
-class Document:
-    """
-    Top-level document container representing a complete filing.
+    # Document Metadata (Shared)
+    rcept_no: str = Field(..., min_length=14, max_length=14)
+    rcept_dt: str = Field(..., pattern=r'^\d{8}$')
+    year: str = Field(..., pattern=r'^\d{4}$')
     
-    Attributes:
-        rcept_no: DART receipt number (unique document ID)
-        sections: Mapping of section names to Section objects
-        raw_xml_path: Path to raw XML file in filesystem cache
-        metadata: Filing metadata (dates, company info, etc.)
-    """
-    rcept_no: str
-    sections: Dict[str, Section]
-    raw_xml_path: Path
-    metadata: 'FilingMetadata'
-
-
-@dataclass
-class FilingMetadata:
-    """
-    Point-in-time (PIT) critical metadata for a filing.
+    # Company Information (Shared)
+    corp_code: str = Field(..., min_length=8, max_length=8)
+    corp_name: str
+    stock_code: str = Field(..., pattern=r'^\d{6}$')
     
-    Attributes:
-        stock_code: Company stock code (e.g., "005930")
-        company_name: Company name (e.g., "삼성전자")
-        report_type: Report type code (e.g., "A001")
-        published_date: Original disclosure date
-        amended_date: Correction/amendment date (if applicable)
-        download_timestamp: When we retrieved the document
-        rcept_no: DART receipt number
-        filing_url: DART URL to original document
-    """
-    stock_code: str
-    company_name: str
+    # Report Type (Shared)
     report_type: str
-    published_date: datetime
-    amended_date: Optional[datetime]
-    download_timestamp: datetime
-    rcept_no: str
-    filing_url: str
+    report_name: str
+    
+    # Section Identity
+    section_code: str
+    section_title: str
+    level: int = Field(..., ge=1, le=4)
+    atocid: str  # Auto Table of Contents ID from XML
+    
+    # Hierarchy
+    parent_section_code: Optional[str] = None
+    parent_section_title: Optional[str] = None
+    section_path: List[str] = Field(default_factory=list)
+    
+    # Content
+    text: str  # Paragraphs + tables flattened to text
+    
+    # Statistics
+    char_count: int = Field(..., ge=0)
+    word_count: int = Field(..., ge=0)
+    
+    # Parsing Metadata
+    parsed_at: datetime
+    parser_version: str
+```
+
+#### 2. **ReportMetadata** (Composition Component)
+Pydantic model for shared report-level metadata, extracted from SectionDocument.
+
+```python
+from pydantic import BaseModel, Field
+
+class ReportMetadata(BaseModel):
+    """
+    Shared report-level metadata extracted from SectionDocument.
+    
+    Design Pattern: Composition over Inheritance
+    - Used by Sequence to provide shared metadata access
+    - Immutable (frozen) to ensure consistency
+    - Validated by Pydantic on creation
+    
+    Rationale:
+    - Avoids inheritance issues (Sequence contains multiple sections)
+    - Clear "has-a" relationship instead of "is-a"
+    - Enables metadata reuse without duplication
+    """
+    rcept_no: str = Field(..., min_length=14, max_length=14)
+    rcept_dt: str = Field(..., pattern=r'^\d{8}$')
+    year: str = Field(..., pattern=r'^\d{4}$')
+    corp_code: str = Field(..., min_length=8, max_length=8)
+    corp_name: str
+    stock_code: str = Field(..., pattern=r'^\d{6}$')
+    report_type: str
+    report_name: str
+    
+    model_config = {"frozen": True}  # Immutable
+    
+    @classmethod
+    def from_section_document(cls, doc: SectionDocument) -> 'ReportMetadata':
+        """Extract metadata from SectionDocument."""
+        return cls(
+            rcept_no=doc.rcept_no,
+            rcept_dt=doc.rcept_dt,
+            year=doc.year,
+            corp_code=doc.corp_code,
+            corp_name=doc.corp_name,
+            stock_code=doc.stock_code,
+            report_type=doc.report_type,
+            report_name=doc.report_name,
+        )
+```
+
+#### 3. **Sequence** (Collection Class)
+User-facing collection of SectionDocument objects from the same report.
+
+```python
+from typing import List, Iterator, Union
+
+class Sequence:
+    """
+    Ordered collection of SectionDocument objects from the same report.
+    
+    Key Features:
+    - Contains List[SectionDocument] with shared metadata
+    - Provides merged text access with customizable separator
+    - Supports indexing by position (int), section_code (str), or slice
+    - Validates all sections share same report metadata
+    - Offers collection statistics (total chars, words, section count)
+    
+    Design Pattern: Composition
+    - "Has-a" ReportMetadata (shared metadata)
+    - "Contains" List[SectionDocument] (sections)
+    
+    Usage:
+        # Create from SectionDocument objects
+        seq = Sequence([doc1, doc2, doc3])
+        
+        # Access sections
+        first = seq[0]                  # By index → SectionDocument
+        specific = seq["020100"]        # By code → SectionDocument
+        subset = seq[1:3]               # By slice → Sequence
+        
+        # Merged text
+        text = seq.text                 # Default separator: \n\n
+        text = seq.get_text(sep="\n")  # Custom separator
+        
+        # Metadata (shared across all sections)
+        print(seq.corp_name, seq.year)
+        
+        # Statistics
+        print(seq.total_word_count, seq.section_count)
+    """
+    
+    def __init__(self, sections: List[SectionDocument]):
+        # Validate all sections share same report metadata
+        # Extract and store shared ReportMetadata
+        # Cache sections list
+        ...
+    
+    # Report metadata access (delegated to self.metadata)
+    @property
+    def rcept_no(self) -> str: ...
+    @property
+    def year(self) -> str: ...
+    @property
+    def stock_code(self) -> str: ...
+    @property
+    def corp_name(self) -> str: ...
+    
+    # Collection access
+    def __getitem__(self, key: Union[int, str, slice]) -> Union[SectionDocument, Sequence]: ...
+    def __iter__(self) -> Iterator[SectionDocument]: ...
+    def __len__(self) -> int: ...
+    
+    # Text access
+    @property
+    def text(self) -> str: ...
+    def get_text(self, separator: str = "\n\n") -> str: ...
+    
+    # Statistics
+    @property
+    def total_char_count(self) -> int: ...
+    @property
+    def total_word_count(self) -> int: ...
+    @property
+    def section_count(self) -> int: ...
 ```
 
 ---
@@ -461,6 +550,316 @@ This ensures backtesting integrity—no future information leaks into historical
 
 ---
 
+## Query Interface Architecture
+
+### Design Overview
+
+The query interface provides a **simple, universal API** for retrieving sections from MongoDB. It supports four primary research use cases with a single method signature.
+
+#### Design Principles
+
+1. **Simplicity**: One method (`get()`) handles all use cases
+2. **Dependency Injection**: `StorageService` injected for testability
+3. **Universal Return Format**: `Dict[year][stock_code] → Sequence`
+4. **No Unnecessary Abstraction**: Plain dictionary return (no wrapper class)
+5. **Composition over Inheritance**: Avoid complex inheritance hierarchies
+
+### Core Components
+
+#### 1. **TextQuery** (Query Interface)
+
+```python
+from typing import Dict, List, Union, Optional
+
+class TextQuery:
+    """
+    High-level query interface for retrieving sections.
+    
+    Design Philosophy:
+    - Single method for all use cases (simplicity)
+    - Dependency injection for StorageService (testability)
+    - Returns plain dictionary (no wrapper overhead)
+    - Handles year range or explicit year list
+    
+    Initialization:
+        storage = StorageService(mongo_uri="...", database="FS", collection="A001")
+        query = TextQuery(storage_service=storage)
+    """
+    
+    def __init__(self, storage_service: StorageService):
+        """Inject StorageService dependency."""
+        self._storage = storage_service
+    
+    def get(
+        self,
+        stock_codes: Union[str, List[str]],
+        years: Union[str, int, List[Union[str, int]], None] = None,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+        section_codes: Union[str, List[str]] = "020000",
+    ) -> Dict[str, Dict[str, Sequence]]:
+        """
+        Universal query method supporting all research use cases.
+        
+        Parameters accept both single values and lists for flexibility:
+        - stock_codes: "005930" or ["005930", "000660"]
+        - years: 2024, [2023, 2024], or None (use start_year/end_year)
+        - start_year/end_year: Alternative to years (inclusive range)
+        - section_codes: "020100" or ["020100", "020200"]
+        
+        Returns:
+            {
+                "2024": {
+                    "005930": Sequence([SectionDocument, ...]),
+                    "000660": Sequence([SectionDocument, ...])
+                },
+                "2023": { ... }
+            }
+        
+        Validation:
+        - Mutually exclusive: years vs start_year/end_year
+        - Required pairing: start_year + end_year together or neither
+        - Range check: end_year >= start_year
+        """
+```
+
+#### 2. **Universal Return Structure**
+
+The return format `Dict[str, Dict[str, Sequence]]` is designed to handle all four research scenarios:
+
+```python
+# Structure: {year: {stock_code: Sequence}}
+
+{
+    "2024": {
+        "005930": Sequence([SectionDocument, SectionDocument, ...]),
+        "000660": Sequence([SectionDocument, ...])
+    },
+    "2023": {
+        "005930": Sequence([...]),
+        "000660": Sequence([...])
+    }
+}
+```
+
+**Why This Structure?**
+
+1. **Time-Series Ready**: Outer key is year → natural iteration for temporal analysis
+2. **Cross-Sectional Ready**: Inner dict is {stock_code: Sequence} → natural firm comparison
+3. **Panel Data Ready**: Nested structure supports multi-dimensional queries
+4. **Consistent**: Same format for all use cases → predictable API
+5. **Flexible**: Easy to extract subsets (single year, single firm, etc.)
+
+### Research Use Cases
+
+#### Use Case 1: Single Firm, Single Year, Single Section
+
+**Scenario**: Get Samsung's 2024 business overview section
+
+```python
+result = query.get(
+    stock_codes="005930",
+    years=2024,
+    section_codes="020100"
+)
+
+# Access
+seq = result["2024"]["005930"]
+text = seq.text
+print(f"Samsung 2024 business overview: {seq.total_word_count} words")
+```
+
+#### Use Case 2: Cross-Sectional Analysis
+
+**Scenario**: Compare business descriptions across semiconductor firms in 2024
+
+```python
+result = query.get(
+    stock_codes=["005930", "000660", "005380"],  # Samsung, SK Hynix, Hyundai
+    years=2024,
+    section_codes="020100"
+)
+
+# Cross-sectional comparison
+for stock_code, seq in result["2024"].items():
+    print(f"{seq.corp_name}: {seq.total_char_count} chars")
+
+# Text similarity analysis
+texts = [seq.text for seq in result["2024"].values()]
+# ... compute similarity matrix
+```
+
+#### Use Case 3: Time-Series Analysis
+
+**Scenario**: Track changes in Samsung's business description over 5 years
+
+```python
+result = query.get(
+    stock_codes="005930",
+    start_year=2020,
+    end_year=2024,
+    section_codes="020100"
+)
+
+# Time-series analysis
+years = sorted(result.keys())
+for year in years:
+    seq = result[year]["005930"]
+    print(f"{year}: {seq.total_word_count} words")
+
+# Year-over-year change analysis
+for i in range(len(years) - 1):
+    curr = result[years[i+1]]["005930"].total_word_count
+    prev = result[years[i]]["005930"].total_word_count
+    change = (curr - prev) / prev * 100
+    print(f"{years[i+1]}: {change:+.1f}% change")
+```
+
+#### Use Case 4: Panel Data Research
+
+**Scenario**: Multi-firm, multi-year analysis for econometric models
+
+```python
+result = query.get(
+    stock_codes=["005930", "000660", "005380"],
+    start_year=2020,
+    end_year=2024,
+    section_codes="020000"  # Parent section with children
+)
+
+# Panel data structure
+for year in sorted(result.keys()):
+    for stock_code, seq in result[year].items():
+        print(f"{year} {seq.corp_name}: "
+              f"{seq.section_count} sections, "
+              f"{seq.total_word_count} words")
+
+# Export to analysis-ready format
+panel_data = []
+for year, firms in result.items():
+    for stock_code, seq in firms.items():
+        for doc in seq:  # Iterate SectionDocument objects
+            panel_data.append({
+                'year': year,
+                'stock_code': stock_code,
+                'corp_name': seq.corp_name,
+                'section_code': doc.section_code,
+                'section_title': doc.section_title,
+                'text': doc.text,
+                'word_count': doc.word_count,
+            })
+
+# Convert to pandas for regression analysis
+import pandas as pd
+df = pd.DataFrame(panel_data)
+df = df.set_index(['year', 'stock_code', 'section_code'])
+```
+
+### Design Rationale
+
+#### Why No QueryResult Wrapper?
+
+**Decision**: Return plain `Dict[str, Dict[str, Sequence]]` instead of wrapping in a custom class.
+
+**Rationale**:
+1. **Simplicity**: Users understand dictionaries natively
+2. **No Overhead**: No extra abstraction layer to learn
+3. **Flexibility**: Standard dict operations (`.items()`, `.keys()`, `.values()`)
+4. **Text-Focused**: Unlike numerical data, text doesn't benefit from DataFrame conversion
+5. **Explicit is Better**: Users see the structure clearly
+
+**Rejected Alternative**:
+```python
+# ❌ Rejected: QueryResult wrapper
+class QueryResult:
+    def __init__(self, data: Dict[str, Dict[str, Sequence]]):
+        self._data = data
+    
+    def to_dataframe(self) -> pd.DataFrame:
+        # Problem: DataFrames not built for massive text data
+        # Problem: Adds abstraction without clear value
+```
+
+#### Why Composition over Inheritance?
+
+**Decision**: Use `ReportMetadata` as a shared component in `Sequence`, not inheritance.
+
+**Problem with Inheritance**:
+```python
+# ❌ BAD: Inheritance approach
+class ReportObject:
+    rcept_no: str
+    year: str
+    stock_code: str
+    section_code: str  # ❌ What if object contains MULTIPLE sections?
+    section_title: str  # ❌ Ambiguous for collections
+
+class Sequence(ReportObject):  # ❌ Doesn't make sense
+    sections: List[SectionDocument]
+```
+
+**Solution with Composition**:
+```python
+# ✅ GOOD: Composition approach
+class ReportMetadata(BaseModel):
+    """Shared metadata extracted from SectionDocument."""
+    rcept_no: str
+    year: str
+    stock_code: str
+    # ... (no section-specific fields)
+    
+    model_config = {"frozen": True}
+
+class Sequence:
+    """Collection of SectionDocument objects."""
+    def __init__(self, sections: List[SectionDocument]):
+        self.metadata = ReportMetadata.from_section_document(sections[0])
+        self._sections = sections
+    
+    @property
+    def year(self) -> str:
+        return self.metadata.year  # Delegated access
+```
+
+**Benefits**:
+1. ✅ **Clear Semantics**: "Has-a" relationship (Sequence *has* metadata)
+2. ✅ **No Ambiguity**: Sequence doesn't inherit section-specific fields
+3. ✅ **Python Best Practice**: "Favor composition over inheritance" (Gang of Four)
+4. ✅ **Flexibility**: Easy to swap or extend metadata implementation
+
+#### Why Dependency Injection?
+
+**Decision**: Inject `StorageService` into `TextQuery` constructor.
+
+```python
+# ✅ GOOD: Dependency Injection
+class TextQuery:
+    def __init__(self, storage_service: StorageService):
+        self._storage = storage_service
+
+# Usage
+storage = StorageService(mongo_uri="...", database="FS", collection="A001")
+query = TextQuery(storage_service=storage)
+```
+
+**Benefits**:
+1. ✅ **Testability**: Easy to mock `StorageService` in unit tests
+2. ✅ **Separation of Concerns**: TextQuery doesn't know about MongoDB connection details
+3. ✅ **Flexibility**: Can swap storage backends without changing TextQuery
+4. ✅ **Reusability**: Multiple `TextQuery` instances can share same `StorageService`
+
+**Rejected Alternative**:
+```python
+# ❌ BAD: Tight coupling
+class TextQuery:
+    def __init__(self, mongo_uri: str, database: str, collection: str):
+        self._storage = StorageService(mongo_uri, database, collection)
+        # Problem: Hard to test (requires real MongoDB)
+        # Problem: Duplicates connection logic
+```
+
+---
+
 ## File System Structure
 
 ### Raw XML Storage
@@ -528,50 +927,141 @@ src/
     
     api/
       __init__.py
-      discovery.py                 # DiscoveryAPI class
-      pipeline.py                  # DisclosurePipeline orchestrator
-      query.py                     # TextQuery interface
+      query.py                     # TextQuery interface (simple query API)
+      pipeline.py                  # DisclosurePipeline orchestrator (future)
     
     services/
       __init__.py
       filing_search.py             # FilingSearchService (uses dart-fss directly)
-      document_parser.py           # DocumentParserService
-      metadata_extractor.py        # MetadataExtractor
-      section_mapper.py            # SectionMapper (USERMARK → name)
+      document_download.py         # DocumentDownloadService
+      storage_service.py           # StorageService (MongoDB CRUD)
     
     parsers/
       __init__.py
-      xml_parser.py                # Low-level XML parsing
-      section_parser.py            # Section extraction logic
-      table_parser.py              # Table parsing logic
-    
-    storage/
-      __init__.py
-      storage_manager.py           # StorageManager (MongoDB CRUD)
-      filesystem_cache.py          # FileSystemCache
-      embedding_repository.py      # EmbeddingRepository
-    
-    integrations/
-      __init__.py
-      mongodb_client.py            # MongoDBClient (database connection only)
+      xml_parser.py                # Low-level XML parsing (load XML, build index)
+      section_parser.py            # Section extraction logic (content + hierarchy)
+      table_parser.py              # Table parsing and text flattening
     
     models/
       __init__.py
-      domain.py                    # Section, Table, Document, FilingMetadata
-      config.py                    # Configuration schemas (Pydantic)
+      section.py                   # SectionDocument (Pydantic, MongoDB schema)
+      metadata.py                  # ReportMetadata (composition component)
+      sequence.py                  # Sequence (collection of SectionDocuments)
+      requests.py                  # Request models (SearchFilingsRequest, etc.)
     
     utils/
       __init__.py
       text_cleaning.py             # Text normalization utilities
       validators.py                # Input validation functions
       logging.py                   # Logging configuration
+    
+    config.py                      # Configuration loading (Pydantic Settings)
+    types.py                       # Helper classes (ReportTypes, etc.)
 ```
+
+### Module Responsibilities
+
+#### **api/**
+- **query.py**: User-facing query interface (`TextQuery`)
+  - Single `get()` method for all research use cases
+  - Dependency injection for `StorageService`
+  - Returns `Dict[year][stock_code] → Sequence`
+- **pipeline.py**: (Future) End-to-end orchestration (`DisclosurePipeline`)
+
+#### **services/**
+- **filing_search.py**: Filing discovery using dart-fss
+  - `FilingSearchService.search_filings()` - Search and filter filings
+  - Direct dart-fss integration (no adapter layer)
+- **document_download.py**: Document download and organization
+  - `DocumentDownloadService.download()` - Download XML files
+  - PIT-aware directory structure
+- **storage_service.py**: MongoDB storage operations
+  - `StorageService.insert_section()` - Insert SectionDocument
+  - `StorageService.get_section_with_descendants()` - Query with hierarchy
+  - `StorageService.get_report_sections()` - Get all sections of a report
+
+#### **parsers/**
+- **xml_parser.py**: Low-level XML utilities
+  - `load_xml()` - Load and validate XML with recovery mode
+  - `build_section_index()` - Create ATOCID-based section index
+  - `map_titles_to_toc()` - Match XML titles to TOC entries
+- **section_parser.py**: Section content extraction
+  - `extract_section_content()` - Extract paragraphs and tables
+  - `reconstruct_hierarchy()` - Build parent-child relationships
+- **table_parser.py**: Table handling
+  - `parse_table()` - Extract table structure
+  - `flatten_table_to_text()` - Convert to text for MVP
+
+#### **models/**
+- **section.py**: `SectionDocument` (Pydantic model, 1:1 MongoDB mapping)
+- **metadata.py**: `ReportMetadata` (shared metadata, composition component)
+- **sequence.py**: `Sequence` (collection class with merged text capability)
+- **requests.py**: Request models for validation
+
+#### **utils/**
+- **validators.py**: Reusable validation functions
+- **text_cleaning.py**: Text normalization
+- **logging.py**: Logging configuration
 
 ---
 
 ## Design Patterns
 
-### 1. **Repository Pattern** (Data Access)
+### 1. **Composition Pattern** (Data Model Design)
+
+Use composition over inheritance for data models to avoid ambiguity and maintain clear semantics.
+
+```python
+# ✅ GOOD: Composition Pattern
+class ReportMetadata(BaseModel):
+    """Shared report-level metadata (immutable)."""
+    rcept_no: str
+    year: str
+    stock_code: str
+    corp_name: str
+    # ... (no section-specific fields)
+    
+    model_config = {"frozen": True}
+    
+    @classmethod
+    def from_section_document(cls, doc: SectionDocument) -> 'ReportMetadata':
+        """Extract from SectionDocument."""
+        return cls(rcept_no=doc.rcept_no, year=doc.year, ...)
+
+class Sequence:
+    """Collection of SectionDocument objects."""
+    def __init__(self, sections: List[SectionDocument]):
+        # "Has-a" relationship with ReportMetadata
+        self.metadata = ReportMetadata.from_section_document(sections[0])
+        self._sections = sections
+    
+    @property
+    def year(self) -> str:
+        return self.metadata.year  # Delegate to metadata
+    
+    @property
+    def text(self) -> str:
+        return "\n\n".join(s.text for s in self._sections)
+```
+
+**Benefits**:
+- **Clear "has-a" relationship**: Sequence *has* metadata, not *is* metadata
+- **No ambiguity**: Sequence doesn't inherit section-specific fields (which would be meaningless for collections)
+- **Flexibility**: Easy to change metadata implementation
+- **Python best practice**: Gang of Four design principle
+
+**Why Not Inheritance?**
+```python
+# ❌ BAD: Inheritance creates ambiguity
+class ReportObject:
+    section_code: str  # ❌ What code if Sequence contains MULTIPLE sections?
+    section_title: str # ❌ Ambiguous for collections
+
+class Sequence(ReportObject):  # ❌ Doesn't make semantic sense
+    sections: List[SectionDocument]
+```
+
+### 2. **Repository Pattern** (Data Access)
 Abstract storage operations behind interfaces:
 
 ```python
@@ -594,7 +1084,7 @@ class StorageManager(ABC):
 
 **Benefits**: Enables testing with in-memory storage; allows future database migration.
 
-### 2. **Strategy Pattern** (Parsing Strategies)
+### 3. **Strategy Pattern** (Parsing Strategies)
 Different parsing strategies for different document types:
 
 ```python
@@ -615,7 +1105,7 @@ class QuarterlyReportParser(ParsingStrategy):
 
 **Benefits**: Extensible to new document types without modifying core logic.
 
-### 3. **Direct dart-fss Company Lookup**
+### 4. **Direct dart-fss Company Lookup**
 Use dart-fss's built-in Singleton caching for company lookups. **No external caching needed!**
 
 ```python
@@ -686,7 +1176,7 @@ class FilingSearchService:
 
 **Validated in Experiment 6**: dart-fss's built-in caching eliminates need for external CSV caching
 
-### 4. **Download Service with dart-fss**
+### 5. **Download Service with dart-fss**
 Services use dart-fss directly rather than through an adapter:
 
 ```python
@@ -718,7 +1208,7 @@ class DownloadService:
 
 **Rationale**: dart-fss IS the adapter layer for DART API. Adding another layer would be over-engineering.
 
-### 5. **Facade Pattern** (API Layer)
+### 6. **Facade Pattern** (API Layer)
 Simplified interface leveraging dart-fss directly:
 
 ```python
