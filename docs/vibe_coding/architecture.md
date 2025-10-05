@@ -285,11 +285,8 @@ class SectionDocument(BaseModel):
     section_code: str
     section_title: str
     level: int = Field(..., ge=1, le=4)
-    atocid: str  # Auto Table of Contents ID from XML
     
-    # Hierarchy
-    parent_section_code: Optional[str] = None
-    parent_section_title: Optional[str] = None
+    # Hierarchy (single field for complete path)
     section_path: List[str] = Field(default_factory=list)
     
     # Content
@@ -928,7 +925,7 @@ src/
     api/
       __init__.py
       query.py                     # TextQuery interface (simple query API)
-      pipeline.py                  # DisclosurePipeline orchestrator (future)
+      pipeline.py                  # DisclosurePipeline orchestrator
     
     services/
       __init__.py
@@ -940,6 +937,7 @@ src/
       __init__.py
       xml_parser.py                # Low-level XML parsing (load XML, build index)
       section_parser.py            # Section extraction logic (content + hierarchy)
+      section_matcher.py           # Strategy pattern for section matching
       table_parser.py              # Table parsing and text flattening
     
     models/
@@ -949,14 +947,19 @@ src/
       sequence.py                  # Sequence (collection of SectionDocuments)
       requests.py                  # Request models (SearchFilingsRequest, etc.)
     
-    utils/
-      __init__.py
-      text_cleaning.py             # Text normalization utilities
-      validators.py                # Input validation functions
-      logging.py                   # Logging configuration
-    
     config.py                      # Configuration loading (Pydantic Settings)
     types.py                       # Helper classes (ReportTypes, etc.)
+    validators.py                  # Input validation functions
+
+config/
+  types.yaml                       # DART report type specifications
+  toc.yaml                         # Table of Contents mapping (A001)
+  settings.yaml                    # Application settings
+
+showcase/
+  showcase_01_text_query.py       # Sample data demonstration
+  showcase_02_live_data_query.py  # Live DART data integration
+  showcase_03_disclosure_pipeline.py  # High-level API demonstration
 ```
 
 ### Module Responsibilities
@@ -966,46 +969,81 @@ src/
   - Single `get()` method for all research use cases
   - Dependency injection for `StorageService`
   - Returns `Dict[year][stock_code] → Sequence`
+  - Handles multiple report versions (returns latest)
 - **pipeline.py**: High-level orchestrator (`DisclosurePipeline`)
   - Takes `StorageService` as injected dependency
   - `download_and_parse()` method for complete workflow
   - Returns statistics dictionary: `{'reports': N, 'sections': M, 'failed': 0}`
   - Coordinates `FilingSearchService`, XML parsing, and storage
+  - Internal methods: `download_document()` and `parse_xml_to_sections()`
 
 #### **services/**
 - **filing_search.py**: Filing discovery using dart-fss
   - `FilingSearchService.search_filings()` - Search and filter filings
   - Direct dart-fss integration (no adapter layer)
+  - Fail-fast authentication error handling
 - **document_download.py**: Document download and organization
-  - `DocumentDownloadService.download()` - Download XML files
-  - PIT-aware directory structure
+  - `DocumentDownloadService.download()` - Download ZIP files
+  - `DocumentDownloadService.extract_xml()` - Extract and organize XML
+  - Year/stock_code/report_type partitioning scheme
+  - Handles multiple XML files in ZIP (selects main file)
 - **storage_service.py**: MongoDB storage operations
-  - `StorageService.insert_section()` - Insert SectionDocument
+  - `StorageService.insert_sections()` - Bulk insert with duplicate handling
+  - `StorageService.get_sections_by_company()` - Query by stock_code and year
+  - `StorageService.get_report_sections()` - Get all sections (sorted by section_code)
   - `StorageService.get_section_with_descendants()` - Query with hierarchy
-  - `StorageService.get_report_sections()` - Get all sections of a report
+  - Connection management with config facade integration
 
 #### **parsers/**
 - **xml_parser.py**: Low-level XML utilities
-  - `load_xml()` - Load and validate XML with recovery mode
-  - `build_section_index()` - Create ATOCID-based section index
-  - `map_titles_to_toc()` - Match XML titles to TOC entries
+  - `load_xml()` - Load and validate XML with UTF-8/EUC-KR fallback
+  - `build_section_index()` - Create section index with optional matcher strategy
+  - `extract_section_by_code()` - Extract specific section content
+  - Handles flat XML structure (siblings, not nested)
+- **section_matcher.py**: Strategy pattern for section matching
+  - `SectionMatcher` (ABC) - Interface for matching strategies
+  - `ExactMatcher` - Direct string lookup
+  - `FuzzyMatcher` - Fuzzy matching with threshold
+  - `CascadeMatcher` - Chains multiple matchers
+  - `create_default_matcher()` - Factory for Exact → Fuzzy (>0.90)
 - **section_parser.py**: Section content extraction
-  - `extract_section_content()` - Extract paragraphs and tables
-  - `reconstruct_hierarchy()` - Build parent-child relationships
+  - `parse_section_content()` - Extract paragraphs and tables
+  - Hierarchy reconstruction using index keys (not ATOCID-dependent)
+  - Handles both numeric ATOCID and sequential string IDs
 - **table_parser.py**: Table handling
-  - `parse_table()` - Extract table structure
-  - `flatten_table_to_text()` - Convert to text for MVP
+  - `flatten_table_to_text()` - Convert tables to text for MVP
 
 #### **models/**
 - **section.py**: `SectionDocument` (Pydantic model, 1:1 MongoDB mapping)
+  - 16 essential fields (optimized schema)
+  - Optional `atocid` field (historical data only)
+  - `section_path` for hierarchy (no redundant parent fields)
 - **metadata.py**: `ReportMetadata` (shared metadata, composition component)
+  - Immutable (frozen) Pydantic model
+  - Factory method: `from_section_document()`
 - **sequence.py**: `Sequence` (collection class with merged text capability)
+  - Collection interface: `__getitem__`, `__iter__`, `__len__`
+  - Merged text access: `text` property, `get_text()` method
+  - Statistics: `total_char_count`, `total_word_count`, `section_count`
+  - Delegated metadata access to `ReportMetadata`
 - **requests.py**: Request models for validation
+  - `SearchFilingsRequest` with Pydantic validators
 
-#### **utils/**
-- **validators.py**: Reusable validation functions
-- **text_cleaning.py**: Text normalization
-- **logging.py**: Logging configuration
+#### **config.py**: Configuration facade
+- `AppConfig` (Pydantic Settings) - Runtime config from .env
+- `get_app_config()` - Singleton accessor
+- `get_toc_mapping()` - Cached TOC mapping from toc.yaml
+- `get_config()` - Cached report types config from types.yaml
+
+#### **validators.py**: Reusable validation functions
+- `validate_stock_code()` - 6-digit format validation
+- `validate_date_yyyymmdd()` - Date format validation
+- `validate_report_types()` - Spec-based validation against types.yaml
+
+#### **types.py**: Discovery helper classes
+- `ReportTypes` - Helper for discovering available report types
+- `CorpClass` - Helper for corporation classifications
+- `RemarkCodes` - Helper for remark codes
 
 ---
 
@@ -1674,7 +1712,7 @@ CMD ["python", "-m", "dart_fss_text.cli"]
 **Experiments:**
 - ✅ exp_11_mongodb_storage.py - Validates MongoDB integration
 
-### Phase 5: API Layer (In Progress)
+### Phase 5: API Layer ✅ (Complete)
 
 **Completed Components:**
 - ✅ `api/query.py` - TextQuery interface
@@ -1682,27 +1720,41 @@ CMD ["python", "-m", "dart_fss_text.cli"]
   - Dependency injection for StorageService
   - Returns `Dict[year][stock_code] → Sequence`
   - Supports single retrieval, cross-sectional, time-series, and panel data queries
-
-**In Progress:**
-- ⏳ `api/pipeline.py` - DisclosurePipeline orchestrator
+  - Handles multiple report versions (returns latest for MVP)
+- ✅ `api/pipeline.py` - DisclosurePipeline orchestrator
   - Takes `StorageService` as injected dependency
   - `download_and_parse()` method for complete workflow
-  - Returns statistics dictionary
+  - Returns statistics dictionary: `{'reports': N, 'sections': M, 'failed': 0}`
+  - Coordinates all components: search, download, parse, store
+  - Fail-fast authentication error handling
+  - UTF-8 to EUC-KR encoding fallback
 
-**Pending:**
-- ⏳ End-to-end pipeline integration with all components
+### Phase 6: Text-Based Section Matching ✅ (Complete)
 
-### Development Metrics (as of 2025-10-04)
+**Completed Components:**
+- ✅ `parsers/section_matcher.py` - Strategy pattern for section matching
+  - `SectionMatcher` (ABC), `ExactMatcher`, `FuzzyMatcher`, `CascadeMatcher`
+  - Factory method for default cascade strategy (Exact → Fuzzy >0.90)
+  - Independent of ATOCID (works for all reports 2010+)
+
+**Impact:**
+- Universal parsing across all DART years (2010-present)
+- Resilient to XML format variations
+- No operational dependency on ATOCID
+
+### Development Metrics (as of 2025-10-05)
 
 | Metric | Value |
 |--------|-------|
-| Total Tests | 200+ |
+| Total Tests | 300+ |
 | Test Pass Rate | 100% |
 | Code Coverage | ~90% |
-| Phases Complete | 4/5 (Phase 5 in progress) |
-| Lines of Code | ~5,000+ |
-| Key Components | FilingSearchService, StorageService, TextQuery, Parsers, Models |
-| Showcase Scripts | 2 (sample data + live data) |
+| Phases Complete | 6/6 (MVP Complete) |
+| Lines of Code | ~6,500+ |
+| Key Components | Complete end-to-end pipeline |
+| Showcase Scripts | 3 (sample + live + high-level API) |
+| Supported Years | 2010-2024 (XML format availability) |
+| Data Availability | 15 years of panel data |
 
 ---
 
@@ -1715,7 +1767,7 @@ CMD ["python", "-m", "dart_fss_text.cli"]
 
 ---
 
-**Last Updated**: 2025-10-04  
-**Version**: 1.2  
-**Status**: Active Development (Phase 5 in progress - DisclosurePipeline)
+**Last Updated**: 2025-10-05  
+**Version**: 1.0.0  
+**Status**: MVP Complete - Production Ready
 

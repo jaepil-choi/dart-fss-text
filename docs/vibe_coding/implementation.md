@@ -153,14 +153,15 @@ result = query.get(
 
 ---
 
-### Phase 7: Pipeline Orchestrator (In Progress)
+### Phase 7: Pipeline Orchestrator ✅ (Complete)
 
-**Planned Components:**
-- ⏳ `api/pipeline.py` - `DisclosurePipeline` orchestrator
+**Components Implemented:**
+- ✅ `api/pipeline.py` - `DisclosurePipeline` orchestrator
   - Takes `StorageService` as injected dependency (explicit DB control)
   - `download_and_parse()` method for complete workflow
   - Returns statistics dictionary: `{'reports': N, 'sections': M, 'failed': 0}`
   - Coordinates `FilingSearchService`, XML parsing, and storage
+  - Internal methods: `download_document()` and `parse_xml_to_sections()`
 
 **Design Philosophy:**
 - Users establish database connection first (explicit control)
@@ -168,11 +169,54 @@ result = query.get(
 - Pipeline handles: search → download → parse → store
 - Returns statistics for monitoring and validation
 
-**Next Steps:**
-- Implement `DisclosurePipeline` class
-- Integrate all components (search, download, parse, store)
-- Update `showcase_02_live_data_query.py` to use pipeline
-- Performance optimization: Connection pooling, bulk operations
+**Test Suite:**
+- 45+ unit tests for DisclosurePipeline (100% passing)
+- Integration tests with live MongoDB and DART API
+- Showcase scripts demonstrating end-to-end workflow
+
+**Key Features:**
+- Fail-fast authentication error handling
+- UTF-8 to EUC-KR encoding fallback for older reports
+- Text-based section matching (independent of ATOCID)
+- Graceful handling of multiple report versions (returns latest)
+- Statistics reporting for monitoring
+
+**Showcase Scripts:**
+- ✅ `showcase/showcase_01_text_query.py` - Sample data demonstration
+- ✅ `showcase/showcase_02_live_data_query.py` - Live DART data integration
+- ✅ `showcase/showcase_03_disclosure_pipeline.py` - High-level API demonstration
+  - Downloads and parses Samsung (005930) and SK Hynix (000660) for 2023-2024
+  - Demonstrates complete workflow with DisclosurePipeline
+  - Non-interactive (automated testing friendly)
+
+---
+
+### Phase 8: Text-Based Section Matching ✅ (Complete)
+
+**Components Implemented:**
+- ✅ `parsers/section_matcher.py` - Strategy pattern for section matching
+  - `SectionMatcher` (ABC) - Interface for matching strategies
+  - `ExactMatcher` - Direct string lookup
+  - `FuzzyMatcher` - Fuzzy matching with configurable threshold
+  - `CascadeMatcher` - Chains multiple matchers (Exact → Fuzzy)
+  - `create_default_matcher()` - Factory for default strategy
+
+**Key Findings:**
+- Older reports (pre-2018) do not have reliable ATOCID attributes
+- Text-based matching against `toc.yaml` is required for universal coverage
+- Cascade strategy: Exact match first, then fuzzy match (score > 0.90)
+- Refactored XML parser to accept optional `SectionMatcher` strategy
+
+**Experiments:**
+- ✅ `exp_13_text_based_section_matching.py` - Validates text-based approach
+  - Tests exact matching accuracy
+  - Tests fuzzy matching with various thresholds
+  - Validates cascade strategy effectiveness
+
+**Impact:**
+- Universal parsing: Works for reports from 2010 onwards
+- Resilient to XML format variations
+- No dependency on ATOCID for operational logic
 
 ---
 
@@ -1393,7 +1437,7 @@ jobs:
 
 ---
 
-**Last Updated**: 2025-10-04  
-**Version**: 1.2  
-**Status**: Active Development (Phase 7 in progress - Pipeline Orchestrator)
+**Last Updated**: 2025-10-05  
+**Version**: 1.0.0  
+**Status**: MVP Complete - Production Ready (Phases 1-8 Complete)
 
