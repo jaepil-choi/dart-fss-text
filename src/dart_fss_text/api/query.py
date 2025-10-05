@@ -229,13 +229,32 @@ class TextQuery:
         - Single section retrieval
         - Parent section + all descendants retrieval
         - Multiple section codes
+        - Multiple reports per company/year (uses latest report)
+        
+        Note:
+            If a company has multiple reports for the same year (e.g., amendments),
+            this returns sections from the LATEST report only (highest rcept_no).
         """
         # Get all sections for this company and year
         sections_data = self._storage.get_sections_by_company(stock_code=stock_code, year=year)
         
+        if not sections_data:
+            return []
+        
         # Convert to SectionDocument objects
         from dart_fss_text.models import SectionDocument
         all_sections = [SectionDocument(**data) for data in sections_data]
+        
+        # Handle multiple reports per company/year
+        # Group by rcept_no and select the latest (highest rcept_no = most recent filing)
+        from collections import defaultdict
+        by_rcept_no = defaultdict(list)
+        for section in all_sections:
+            by_rcept_no[section.rcept_no].append(section)
+        
+        # Select latest report (rcept_no is sortable: YYYYMMDDNNNNNN format)
+        latest_rcept_no = max(by_rcept_no.keys())
+        all_sections = by_rcept_no[latest_rcept_no]
         
         # Filter to requested section codes (including descendants)
         # Descendants are identified by section_path containing the parent code
