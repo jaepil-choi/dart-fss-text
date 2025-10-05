@@ -249,9 +249,11 @@ class TextQuery:
                     if section not in filtered_sections:  # Avoid duplicates
                         filtered_sections.append(section)
         
-        # Sort by ATOCID to maintain TOC order
+        # Sort by section_code to maintain TOC order
+        # section_code is zero-padded 6-digit string (e.g., "010000", "010100")
+        # Can be sorted lexicographically
         if filtered_sections:
-            filtered_sections.sort(key=lambda s: int(s.atocid))
+            filtered_sections.sort(key=lambda s: s.section_code)
         
         return filtered_sections
 

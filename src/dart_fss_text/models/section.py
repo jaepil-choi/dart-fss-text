@@ -135,10 +135,10 @@ class SectionDocument(BaseModel):
         examples=[2]
     )
     
-    atocid: str = Field(
-        ...,
-        description="Auto Table of Contents ID from original XML",
-        examples=["10"]
+    atocid: Optional[str] = Field(
+        None,
+        description="Auto Table of Contents ID from original XML (None for older reports without ATOCID)",
+        examples=["10", None]
     )
     
     # === Hierarchy ===

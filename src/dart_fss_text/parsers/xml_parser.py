@@ -204,18 +204,19 @@ def extract_section_by_code(
     
     # Find section with matching code
     target = None
-    for atocid, metadata in section_index.items():
+    target_key = None
+    for index_key, metadata in section_index.items():
         if metadata['section_code'] == section_code:
             target = metadata
+            target_key = index_key
             break
     
     if not target:
         return None
     
     section_elem = target['element']
-    parent_atocid = target['atocid']
     
-    return parse_section_content(section_elem, section_index, section_code, parent_atocid)
+    return parse_section_content(section_elem, section_index, section_code, target_key)
 
 
 def validate_section_coverage(

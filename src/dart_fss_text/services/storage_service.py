@@ -178,13 +178,13 @@ class StorageService:
     
     def get_report_sections(self, rcept_no: str) -> List[Dict[str, Any]]:
         """
-        Retrieve all sections for a report, sorted by atocid.
+        Retrieve all sections for a report, sorted by section_code.
         
         Args:
             rcept_no: Receipt number (14 digits)
         
         Returns:
-            List of section documents sorted by atocid (document order)
+            List of section documents sorted by section_code (TOC order)
         
         Example:
             >>> sections = service.get_report_sections('20240312000736')
@@ -194,8 +194,9 @@ class StorageService:
             'rcept_no': rcept_no
         }))
         
-        # Sort by atocid numerically (MongoDB sorts strings alphabetically)
-        sections.sort(key=lambda x: int(x.get('atocid', 0)))
+        # Sort by section_code (zero-padded 6-digit strings like "010000", "010100")
+        # Lexicographic sorting maintains TOC hierarchy
+        sections.sort(key=lambda x: x.get('section_code', 'ZZZZZZ'))
         
         return sections
     
