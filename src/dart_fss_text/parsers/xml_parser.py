@@ -67,9 +67,36 @@ def build_section_index(
             ...
         }
     """
-    # Parse XML with recovery mode for malformed documents
-    parser = etree.XMLParser(recover=True, huge_tree=True, encoding='utf-8')
-    tree = etree.parse(str(xml_path), parser)
+    # Parse XML with encoding fallback (UTF-8 → EUC-KR)
+    # DART XML files are sometimes encoded in EUC-KR instead of UTF-8
+    tree = None
+    last_error = None
+    
+    for encoding in ['utf-8', 'euc-kr']:
+        try:
+            parser = etree.XMLParser(recover=True, huge_tree=True, encoding=encoding)
+            tree = etree.parse(str(xml_path), parser)
+            break  # Success - stop trying
+        except etree.XMLSyntaxError as e:
+            if 'encoding' in str(e).lower():
+                # Encoding error - try next encoding
+                last_error = e
+                continue
+            else:
+                # Non-encoding error - raise immediately
+                raise
+        except Exception as e:
+            # Unexpected error - raise immediately
+            raise
+    
+    if tree is None:
+        # Both encodings failed
+        raise ValueError(
+            f"Failed to parse XML with UTF-8 or EUC-KR encoding. "
+            f"File: {xml_path}. "
+            f"Last error: {last_error}"
+        )
+    
     root = tree.getroot()
     
     index = {}

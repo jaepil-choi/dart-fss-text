@@ -66,9 +66,11 @@ print(f"  ✓ DisclosurePipeline ready")
 
 # === Step 4: Execute Complete Workflow ===
 
+YEARS = [2023, 2024]
+
 print("\n[Step 4] Executing complete workflow...")
 print("  Companies: 삼성전자 (005930), SK하이닉스 (000660)")
-print("  Years: 2023, 2024")
+print(f"  Years: {YEARS}")
 print("  Report Type: A001 (Annual Reports)")
 print()
 
@@ -77,7 +79,7 @@ start_time = datetime.now()
 # Single method call to do everything!
 stats = pipeline.download_and_parse(
     stock_codes=["005930", "000660"],
-    years=[2023, 2024],
+    years=YEARS,
     report_type="A001"
 )
 
@@ -100,7 +102,7 @@ query = TextQuery(storage_service=storage)
 # Query all years and companies
 result = query.get(
     stock_codes=["005930", "000660"],
-    years=[2023, 2024],
+    years=YEARS,
     section_codes=["020000"]  # 사업의 내용
 )
 
