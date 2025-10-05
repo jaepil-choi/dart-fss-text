@@ -1499,3 +1499,75 @@ Query Result (SK Hynix 2018):
 
 **Status**: Multiple reports handling implemented for MVP (latest-only), full version management deferred to Phase 7
 
+---
+
+### Critical Finding: XML Data Availability - 2010 Onwards Only
+
+**Discovery**: DART XML format is only available from **2010 onwards**. Earlier years (2009 and before) return empty results.
+
+**Testing Evidence**:
+```
+Year 2010: ✓ Data available (XML format)
+Year 2009: ✗ Empty results (no XML)
+Year 2008: ✗ Empty results (no XML)
+...
+```
+
+**Root Cause**: 
+- DART transitioned to XML-based disclosure format in 2010
+- Pre-2010 reports may exist in different formats (PDF, HWP, or paper-only)
+- DART OPEN API does not provide XML access for historical reports before 2010
+
+**Impact on Research**:
+
+1. **Historical Analysis Limited**
+   - Cannot analyze text data before 2010 using this library
+   - Time-series studies limited to 2010-present (14+ years of data)
+   - Cross-sectional studies must exclude pre-2010 observations
+
+2. **Sample Selection Considerations**
+   - IPOs before 2010: First annual report in XML format is 2010 or later
+   - Long-term studies: Must start from 2010 or later
+   - Event studies: Cannot analyze events occurring before 2010
+
+3. **Data Availability by Report Type**
+   - **A001 (Annual Reports)**: 2010-present ✓
+   - **A002 (Semi-Annual)**: 2010-present ✓
+   - **A003 (Quarterly)**: 2010-present ✓
+   - Pre-2010: All report types unavailable in XML
+
+**Workarounds** (Outside Library Scope):
+- Manual PDF parsing for pre-2010 data (not supported by this library)
+- Use dart-fss for numerical data only (XBRL may have different coverage)
+- Focus research on 2010+ period (still 14+ years of panel data)
+
+**User Guidance**:
+
+```python
+# Good: Use 2010 onwards
+pipeline.download_and_parse(
+    stock_codes=["005930"],
+    years=range(2010, 2025),  # 2010-2024
+    report_type="A001"
+)
+
+# Bad: Will return empty for pre-2010
+pipeline.download_and_parse(
+    stock_codes=["005930"],
+    years=range(2005, 2025),  # 2005-2009 will be empty
+    report_type="A001"
+)
+```
+
+**Recommendation**: 
+- Document in user-facing docs and error messages
+- Add validation warning when users request pre-2010 data
+- Consider adding `validate_year_range()` helper that warns about pre-2010
+
+**Future Consideration**:
+- Phase 8+: Investigate if DART has historical data in other formats
+- Could add PDF parsing module for pre-2010 coverage (significant scope expansion)
+- Likely not worth the complexity for MVP (14 years is sufficient for most research)
+
+**Status**: Data availability validated, 2010+ coverage confirmed for XML format
+
