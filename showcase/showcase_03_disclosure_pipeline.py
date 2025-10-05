@@ -66,7 +66,7 @@ print(f"  ✓ DisclosurePipeline ready")
 
 # === Step 4: Execute Complete Workflow ===
 
-YEARS = [2023, 2024]
+YEARS = [2018]
 
 print("\n[Step 4] Executing complete workflow...")
 print("  Companies: 삼성전자 (005930), SK하이닉스 (000660)")
@@ -109,10 +109,12 @@ result = query.get(
 print(f"  ✓ Query executed")
 print()
 print("  Results structure:")
+print(result)
 for year in sorted(result.keys()):
     print(f"    Year {year}:")
     for stock_code in sorted(result[year].keys()):
         sequence = result[year][stock_code]
+        print(f"      {stock_code}")
         if sequence:
             metadata = sequence.metadata
             print(f"      {stock_code} ({metadata.corp_name}): {len(sequence)} sections")
