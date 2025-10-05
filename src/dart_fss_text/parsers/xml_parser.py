@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from lxml import etree
 
+from dart_fss_text.parsers.section_matcher import (
+    SectionMatcher,
+    create_default_matcher
+)
+
 
 def load_toc_mapping(report_type: str = 'A001') -> Dict[str, str]:
     """
@@ -39,22 +44,25 @@ def load_toc_mapping(report_type: str = 'A001') -> Dict[str, str]:
 
 def build_section_index(
     xml_path: Path,
-    toc_mapping: Dict[str, str]
+    toc_mapping: Dict[str, str],
+    matcher: Optional[SectionMatcher] = None
 ) -> Dict[str, Dict[str, Any]]:
     """
     Build lightweight index of all SECTION-N elements in XML.
     
-    CRITICAL: Uses flat structure scanning, not recursive descent.
-    - ATOCID extracted from TITLE tag (not SECTION tag)
-    - All sections are siblings in XML tree
-    - Hierarchy reconstructed later from ATOCID sequence
+    CRITICAL: Uses text-based matching, not ATOCID (absent in older reports).
+    - TITLE text matched against toc.yaml using configurable strategy
+    - All sections are siblings in flat XML structure
+    - Sequential indexing used when ATOCID absent
     
     Args:
         xml_path: Path to DART XML file
         toc_mapping: Title → section_code mapping from toc.yaml
+        matcher: Optional SectionMatcher strategy. Defaults to:
+                 Exact → Fuzzy(0.90) cascade
     
     Returns:
-        Dictionary mapping ATOCID to section metadata:
+        Dictionary mapping index_key to section metadata:
         {
             '3': {
                 'level': 1,
@@ -99,7 +107,12 @@ def build_section_index(
     
     root = tree.getroot()
     
+    # Initialize matcher if not provided
+    if matcher is None:
+        matcher = create_default_matcher()
+    
     index = {}
+    sequential_id = 1  # Fallback ID when ATOCID absent
     
     # Find all SECTION-N tags (flat structure scan)
     sections = root.xpath("//SECTION-1 | //SECTION-2 | //SECTION-3 | //SECTION-4")
@@ -107,26 +120,32 @@ def build_section_index(
     for section in sections:
         level = int(section.tag.split('-')[1])
         
-        # CRITICAL: Extract ATOCID from TITLE tag (not SECTION tag!)
+        # Extract TITLE tag
         title_elem = section.find('TITLE')
         if title_elem is None:
             continue  # Skip sections without TITLE
         
+        # Get title text
         title = ''.join(title_elem.itertext()).strip()
-        atocid = title_elem.get('ATOCID')  # Get ATOCID from TITLE
+        if not title:
+            continue  # Skip empty titles
         
-        # Skip sections without ATOCID
-        if not atocid:
-            continue
+        # Get ATOCID (may be None for older reports)
+        atocid = title_elem.get('ATOCID')
         
-        # Map title to section_code using toc.yaml
-        section_code = map_title_to_section_code(title, toc_mapping)
+        # Use ATOCID if present, otherwise use sequential ID
+        index_key = atocid if atocid else str(sequential_id)
+        sequential_id += 1
         
-        index[atocid] = {
+        # Match title to section_code using strategy
+        section_code = matcher.match(title, toc_mapping)
+        
+        # Store section metadata
+        index[index_key] = {
             'level': level,
             'title': title,
-            'section_code': section_code,
-            'atocid': atocid,
+            'section_code': section_code,  # May be None if no match
+            'atocid': atocid,  # Preserve original ATOCID (may be None)
             'aclass': section.get('ACLASS'),
             'element': section  # Store reference for later content extraction
         }
