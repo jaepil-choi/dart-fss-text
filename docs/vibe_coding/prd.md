@@ -302,6 +302,82 @@ for year, companies in result.items():
 
 ---
 
+## Known Limitations (MVP Scope)
+
+### Multiple Report Versions (Amendments) - Latest Only
+
+**Issue**: Companies often file **amended reports** (기재정정) for the same fiscal year—e.g., an original filing in March, then a correction in June.
+
+**MVP Behavior**: When multiple reports exist for the same company/year, `TextQuery.get()` returns **only the latest version** (highest `rcept_no`).
+
+**Example**:
+```python
+# SK Hynix filed 2 reports for 2017 fiscal year:
+# - 20180402004745 (April 2, 2018): Original
+# - 20180615000111 (June 15, 2018): Amendment [기재정정]
+
+# Query returns ONLY the June 15 version
+result = query.get(stock_codes="000660", years=2018, section_codes="020000")
+# result["2018"]["000660"].metadata.rcept_no == "20180615000111"
+```
+
+**Why This Limitation Exists**:
+
+1. **MVP Focus on 사업의 내용 (Business Description)**
+   - Section 020000 is rarely amended (business model rarely changes)
+   - Amendments typically affect financial numbers, governance, or compliance sections
+   - For our MVP use case, latest version is sufficient
+
+2. **Complexity vs. Benefit Trade-off**
+   - Full version management requires:
+     - Schema changes (`filing_date`, `filing_sequence`, `is_amendment`, `supersedes_rcept_no`)
+     - Query API enhancements (version selection, PIT queries with `as_of_date`)
+     - Complex test coverage across all version scenarios
+   - Benefit for MVP use case: **Minimal** (amendments don't materially affect 사업의 내용)
+
+**Impact**:
+- ✅ **Most users unaffected**: Get corrected/updated text automatically
+- ❌ **Forward-looking bias possible**: Cannot retrieve original filing for true point-in-time (PIT) analysis
+- ❌ **Amendment visibility**: Cannot compare what changed between versions
+
+**Workaround for PIT-Critical Research**:
+```python
+# Current workaround: Query database directly by rcept_no
+sections = storage.get_report_sections(rcept_no="20180402004745")  # Original filing
+```
+
+**Future Enhancement** (Post-MVP, Phase 7):
+
+```python
+# Proposed API for full version management
+result = query.get(
+    stock_codes="000660",
+    years=2018,
+    section_codes="020000",
+    version="original"  # Options: "latest" (default), "original", "all"
+)
+
+# Or PIT query
+result = query.get(
+    stock_codes="000660",
+    years=2018,
+    section_codes="020000",
+    as_of_date="20180430"  # Return version available on April 30, 2018
+)
+```
+
+**Design Rationale**: 
+- **Pragmatic MVP**: Deliver core value (textual section extraction) first
+- **Documented clearly**: Users know the limitation upfront
+- **Upgrade path defined**: Future enhancement path is clear (Phase 7)
+- **Transparent trade-off**: Complexity deferred for valid reason (not material to MVP)
+
+**References**:
+- See `experiments/FINDINGS.md` - "Phase 6: Query Layer & Multiple Reports Handling" for technical details
+- Discovery: `showcase_03` with 2018 data revealed SK하이닉스 with 2 filings
+
+---
+
 ## DART Report Types Catalog
 
 Based on the DART OPEN API specifications, the following report types are available.
