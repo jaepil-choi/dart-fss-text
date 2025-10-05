@@ -66,7 +66,7 @@ print(f"  ✓ DisclosurePipeline ready")
 
 # === Step 4: Execute Complete Workflow ===
 
-YEARS = [2018]
+YEARS = [2023, 2024]
 
 print("\n[Step 4] Executing complete workflow...")
 print("  Companies: 삼성전자 (005930), SK하이닉스 (000660)")
@@ -109,23 +109,29 @@ result = query.get(
 print(f"  ✓ Query executed")
 print()
 print("  Results structure:")
-print(result)
 for year in sorted(result.keys()):
     print(f"    Year {year}:")
     for stock_code in sorted(result[year].keys()):
         sequence = result[year][stock_code]
-        print(f"      {stock_code}")
         if sequence:
             metadata = sequence.metadata
-            print(f"      {stock_code} ({metadata.corp_name}): {len(sequence)} sections")
+            print(f"      {stock_code} ({metadata.corp_name}): {sequence.section_count} sections")
             print(f"        - Report: {metadata.report_name}")
-            print(f"        - Text length: {len(sequence.text):,} characters")
+            print(f"        - Total text length: {sequence.total_char_count:,} characters")
+            print(f"        - Total word count: {sequence.total_word_count:,} words")
             
-            # Show first section details
-            if len(sequence) > 0:
-                first_section = sequence[0]
-                print(f"        - First section: {first_section.section_title}")
-                print(f"        - Preview: {first_section.text[:100]}...")
+            # Show section details (iterate over first 3 sections)
+            print(f"        - Sections:")
+            for i, section in enumerate(list(sequence)[:3]):  # Show first 3 sections
+                print(f"          [{i}] {section.section_title}")
+                print(f"              ({len(section.text):,} chars)")
+            
+            if len(sequence) > 3:
+                print(f"          ... and {len(sequence) - 3} more sections")
+            
+            # Test sequence.text property (merged text of all sections)
+            print(f"        - Merged text preview (first 200 chars):")
+            print(f"          {sequence.text[:200]}...")
         else:
             print(f"      {stock_code}: No data found")
 
