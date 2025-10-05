@@ -15,7 +15,6 @@ Requirements:
 Status: Live smoke test with real MongoDB
 """
 
-import os
 from datetime import datetime
 
 print("=" * 80)
@@ -28,24 +27,23 @@ print("\n[Step 1] Importing modules...")
 from dart_fss_text.services.storage_service import StorageService
 from dart_fss_text.api import TextQuery
 from dart_fss_text.models import SectionDocument, create_document_id
+from dart_fss_text.config import get_app_config
 
-# MongoDB configuration
-MONGO_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
-DATABASE = os.getenv("MONGODB_DATABASE", "FS")
-COLLECTION = "A001_showcase"  # Temporary collection for showcase
+# Load configuration from config facade
+config = get_app_config()
 
-print(f"  MongoDB URI: {MONGO_URI}")
-print(f"  Database: {DATABASE}")
+# Use temporary collection for showcase (override default A001)
+COLLECTION = "A001_showcase"
+
+print(f"  MongoDB URI: {config.mongodb_uri}")
+print(f"  Database: {config.mongodb_database}")
 print(f"  Collection: {COLLECTION}")
 
 # === Step 2: Initialize Services ===
 
 print("\n[Step 2] Initializing services...")
-storage = StorageService(
-    mongo_uri=MONGO_URI,
-    database=DATABASE,
-    collection=COLLECTION
-)
+# Override collection only (other config from facade)
+storage = StorageService(collection=COLLECTION)
 
 query = TextQuery(storage_service=storage)
 print("  ✓ StorageService initialized")

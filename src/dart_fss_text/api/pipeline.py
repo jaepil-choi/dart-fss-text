@@ -191,9 +191,6 @@ def _convert_to_section_document(
         section_code=parsed_section['section_code'],
         section_title=parsed_section['title'],
         level=parsed_section['level'],
-        atocid=parsed_section['atocid'],
-        parent_section_code=None,  # TODO: Implement parent detection
-        parent_section_title=None,
         section_path=section_path,
         text=full_text,
         char_count=char_count,

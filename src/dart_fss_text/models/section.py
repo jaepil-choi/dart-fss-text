@@ -37,9 +37,6 @@ class SectionDocument(BaseModel):
         ...     section_code="020100",
         ...     section_title="1. 사업의 개요",
         ...     level=2,
-        ...     atocid="10",
-        ...     parent_section_code="020000",
-        ...     parent_section_title="II. 사업의 내용",
         ...     section_path=["020000", "020100"],
         ...     text="당사는 본사를 거점으로...",
         ...     char_count=2500,
@@ -131,32 +128,14 @@ class SectionDocument(BaseModel):
         ...,
         ge=1,
         le=4,
-        description="Section level",
+        description="Section level (1=root, 2=subsection, etc.)",
         examples=[2]
     )
     
-    atocid: Optional[str] = Field(
-        None,
-        description="Auto Table of Contents ID from original XML (None for older reports without ATOCID)",
-        examples=["10", None]
-    )
-    
     # === Hierarchy ===
-    parent_section_code: Optional[str] = Field(
-        None,
-        description="Parent section code (null for root sections)",
-        examples=["020000"]
-    )
-    
-    parent_section_title: Optional[str] = Field(
-        None,
-        description="Parent section title",
-        examples=["II. 사업의 내용"]
-    )
-    
     section_path: List[str] = Field(
         default_factory=list,
-        description="Path from root to this section",
+        description="Hierarchical path from root to this section (ordered list of section_codes)",
         examples=[["020000", "020100"]]
     )
     
@@ -241,9 +220,6 @@ class SectionDocument(BaseModel):
                     "section_code": "020100",
                     "section_title": "1. 사업의 개요",
                     "level": 2,
-                    "atocid": "10",
-                    "parent_section_code": "020000",
-                    "parent_section_title": "II. 사업의 내용",
                     "section_path": ["020000", "020100"],
                     "text": "당사는 본사를 거점으로 한국과 DX 부문 산하 해외 9개 지역총괄...",
                     "char_count": 2500,

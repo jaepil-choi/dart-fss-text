@@ -55,10 +55,6 @@ import yaml
 
 # Load configuration from config facade
 config = get_app_config()
-MONGO_URI = config.mongodb_uri
-DATABASE = config.mongodb_database
-COLLECTION = config.mongodb_collection
-OPENDART_API_KEY = config.opendart_api_key
 
 # Companies to download
 COMPANIES = [
@@ -68,28 +64,25 @@ COMPANIES = [
 YEARS = ["2023", "2024"]
 REPORT_TYPE = "A001"  # Annual Report
 
-print(f"  MongoDB: {DATABASE}.{COLLECTION}")
+print(f"  MongoDB: {config.mongodb_database}.{config.mongodb_collection}")
 print(f"  Companies: {', '.join([f'{name}({code})' for code, name in COMPANIES])}")
 print(f"  Years: {', '.join(YEARS)}")
 print(f"  Report Type: {REPORT_TYPE}")
 
-if not OPENDART_API_KEY:
+if not config.opendart_api_key:
     print("\n❌ ERROR: OPENDART_API_KEY not found!")
     print("   Please set OPENDART_API_KEY in your .env file")
     print("   Configuration is loaded via config.get_app_config()")
     sys.exit(1)
 
 # Set DART API key
-dart.set_api_key(OPENDART_API_KEY)
+dart.set_api_key(config.opendart_api_key)
 
 # === Step 2: Initialize Services ===
 
 print("\n[Step 2] Initializing services...")
-storage = StorageService(
-    mongo_uri=MONGO_URI,
-    database=DATABASE,
-    collection=COLLECTION
-)
+# Use config facade (no need to pass parameters)
+storage = StorageService()
 
 query = TextQuery(storage_service=storage)
 filing_search = FilingSearchService()
@@ -477,12 +470,12 @@ print("DATA LOCATION")
 print("=" * 80)
 
 print(f"\n✓ Data stored in MongoDB:")
-print(f"  Database: {DATABASE}")
-print(f"  Collection: {COLLECTION}")
+print(f"  Database: {config.mongodb_database}")
+print(f"  Collection: {config.mongodb_collection}")
 print(f"\nYou can query this data using:")
 print(f"  from dart_fss_text.services import StorageService")
 print(f"  from dart_fss_text.api import TextQuery")
-print(f"  storage = StorageService(database='{DATABASE}', collection='{COLLECTION}')")
+print(f"  storage = StorageService()  # Uses config facade")
 print(f"  query = TextQuery(storage_service=storage)")
 print(f"\nTo clean up: storage.collection.drop()")
 
