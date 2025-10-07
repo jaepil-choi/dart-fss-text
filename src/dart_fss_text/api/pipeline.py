@@ -13,7 +13,7 @@ Design Philosophy:
 - Statistics-based monitoring (returns actionable metrics)
 """
 
-from typing import Dict, List, Union
+from typing import Dict, List, Union, Optional
 import logging
 from pathlib import Path
 
@@ -72,7 +72,12 @@ def download_document(filing, base_dir: str = "data") -> Path:
     return result.main_xml_path
 
 
-def parse_xml_to_sections(xml_path: Path, filing, report_type: str = "A001") -> List[SectionDocument]:
+def parse_xml_to_sections(
+    xml_path: Path, 
+    filing, 
+    report_type: str = "A001",
+    target_section_codes: Optional[List[str]] = None
+) -> List[SectionDocument]:
     """
     Parse XML file to SectionDocument objects using existing parsers.
     
@@ -80,16 +85,22 @@ def parse_xml_to_sections(xml_path: Path, filing, report_type: str = "A001") -> 
         xml_path: Path to XML file
         filing: Filing object with metadata
         report_type: Report type code (default: "A001")
+        target_section_codes: Optional list of section codes to extract.
+                             If None, extracts all sections.
+                             If specified, only extracts matching sections.
     
     Returns:
-        List of SectionDocument objects
+        List of SectionDocument objects (filtered by target_section_codes if provided)
     
     Raises:
         Exception: If XML parsing fails
     
     Example:
+        # Extract all sections
         sections = parse_xml_to_sections(xml_path, filing)
-        # Returns: [SectionDocument(...), SectionDocument(...), ...]
+        
+        # Extract only specific section
+        sections = parse_xml_to_sections(xml_path, filing, target_section_codes=["020100"])
     """
     # Load TOC mapping
     toc_mapping = get_toc_mapping(report_type)
@@ -108,6 +119,11 @@ def parse_xml_to_sections(xml_path: Path, filing, report_type: str = "A001") -> 
         # Skip unmapped sections
         if not section_code:
             logger.debug(f"Skipping unmapped section: {metadata['title']}")
+            continue
+        
+        # Filter by target sections if specified
+        if target_section_codes and section_code not in target_section_codes:
+            logger.debug(f"Skipping non-target section: {section_code} - {metadata['title']}")
             continue
         
         # Extract section content
@@ -274,7 +290,8 @@ class DisclosurePipeline:
         self,
         stock_codes: Union[str, List[str]],
         years: Union[int, List[int]],
-        report_type: str = "A001"
+        report_type: str = "A001",
+        target_section_codes: Optional[List[str]] = None
     ) -> Dict[str, int]:
         """
         Complete workflow: search → download → parse → store.
@@ -283,6 +300,10 @@ class DisclosurePipeline:
             stock_codes: Company stock codes (e.g., ["005930", "000660"] or "005930")
             years: Years to fetch (e.g., [2023, 2024] or 2024)
             report_type: DART report type code (default: "A001" for Annual Report)
+            target_section_codes: Optional list of section codes to extract.
+                                 If None, extracts all sections.
+                                 If specified, only extracts matching sections.
+                                 Example: ["020100"] for "1. 사업의 개요"
         
         Returns:
             Statistics dictionary:
@@ -299,10 +320,19 @@ class DisclosurePipeline:
             - Tracks statistics for monitoring
         
         Example:
+            # Extract all sections
             stats = pipeline.download_and_parse(
                 stock_codes=["005930", "000660"],
                 years=[2023, 2024],
                 report_type="A001"
+            )
+            
+            # Extract only specific section
+            stats = pipeline.download_and_parse(
+                stock_codes=["005930"],
+                years=[2023],
+                report_type="A001",
+                target_section_codes=["020100"]
             )
         """
         # Normalize inputs
@@ -338,7 +368,12 @@ class DisclosurePipeline:
                             logger.debug(f"Downloaded {filing.rcept_no} to {xml_path}")
                             
                             # Parse
-                            sections = parse_xml_to_sections(xml_path, filing)
+                            sections = parse_xml_to_sections(
+                                xml_path, 
+                                filing, 
+                                report_type=report_type,
+                                target_section_codes=target_section_codes
+                            )
                             logger.debug(f"Parsed {len(sections)} sections from {filing.rcept_no}")
                             
                             # Store

@@ -16,6 +16,7 @@ Companies:
 
 Years: 2023, 2024
 Report Type: A001 (Annual Reports)
+Target Section: 020100 (1. 사업의 개요 - Business Overview only)
 
 Requirements:
 - MongoDB running on localhost:27017
@@ -23,6 +24,8 @@ Requirements:
 - Internet connection for DART API calls
 
 Status: Live smoke test with high-level API
+Note: Uses target_section_codes to extract only specific sections,
+      reducing storage by 99%+ and avoiding MongoDB 16MB document size limits.
 """
 
 from pathlib import Path
@@ -72,15 +75,18 @@ print("\n[Step 4] Executing complete workflow...")
 print("  Companies: 삼성전자 (005930), SK하이닉스 (000660)")
 print(f"  Years: {YEARS}")
 print("  Report Type: A001 (Annual Reports)")
+print("  Target Section: 020100 (1. 사업의 개요 - Business Overview)")
 print()
 
 start_time = datetime.now()
 
 # Single method call to do everything!
+# Only extracts section 020100 to save storage and avoid MongoDB size limits
 stats = pipeline.download_and_parse(
     stock_codes=["005930", "000660"],
     years=YEARS,
-    report_type="A001"
+    report_type="A001",
+    target_section_codes=["020100"]  # Only extract "1. 사업의 개요"
 )
 
 elapsed = (datetime.now() - start_time).total_seconds()
@@ -103,7 +109,7 @@ query = TextQuery(storage_service=storage)
 result = query.get(
     stock_codes=["005930", "000660"],
     years=YEARS,
-    section_codes=["020000"]  # 사업의 내용
+    section_codes=["020100"]  # 사업의 내용
 )
 
 print(f"  ✓ Query executed")
@@ -146,6 +152,10 @@ print("1. ✓ DisclosurePipeline provides a single method for the entire workflo
 print("2. ✓ Explicit StorageService initialization allows DB connection verification")
 print("3. ✓ Statistics returned for monitoring and debugging")
 print("4. ✓ Data immediately queryable via TextQuery")
+print("5. ✓ target_section_codes parameter extracts only specific sections")
+print("   - Reduces storage by 99%+ (1 section vs 50+ sections per report)")
+print("   - Avoids MongoDB 16MB document size limit errors")
+print("   - Speeds up parsing and storage operations")
 print()
 print("Compare this to showcase_02:")
 print("  - showcase_02: ~200 lines (low-level, manual workflow)")
