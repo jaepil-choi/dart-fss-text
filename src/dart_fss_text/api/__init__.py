@@ -7,6 +7,7 @@ and working with stored financial disclosure sections.
 
 from dart_fss_text.api.query import TextQuery
 from dart_fss_text.api.pipeline import DisclosurePipeline
+from dart_fss_text.api.backfill import BackfillService
 
-__all__ = ['TextQuery', 'DisclosurePipeline']
+__all__ = ['TextQuery', 'DisclosurePipeline', 'BackfillService']
 

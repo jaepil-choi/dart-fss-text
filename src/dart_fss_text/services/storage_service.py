@@ -76,17 +76,29 @@ class StorageService:
         self.collection_name = collection or config.mongodb_collection
         
         # Connect to MongoDB
-        self.client = MongoClient(
-            self.mongo_uri,
-            serverSelectionTimeoutMS=5000  # 5 second timeout
-        )
-        
-        # Test connection
-        self.client.admin.command('ping')
-        
-        # Get database and collection
-        self.db = self.client[self.database_name]
-        self.collection = self.db[self.collection_name]
+        try:
+            self.client = MongoClient(
+                self.mongo_uri,
+                serverSelectionTimeoutMS=5000  # 5 second timeout
+            )
+            
+            # Test connection
+            self.client.admin.command('ping')
+            
+            # Get database and collection
+            self.db = self.client[self.database_name]
+            self.collection = self.db[self.collection_name]
+            
+        except ConnectionFailure as e:
+            raise ConnectionFailure(
+                f"❌ Failed to connect to MongoDB at {self.mongo_uri}. "
+                f"Please ensure MongoDB is running and accessible. "
+                f"Error: {str(e)}"
+            ) from e
+        except Exception as e:
+            raise ConnectionFailure(
+                f"❌ Unexpected error connecting to MongoDB: {str(e)}"
+            ) from e
     
     def insert_sections(self, documents: List[SectionDocument]) -> Dict[str, Any]:
         """

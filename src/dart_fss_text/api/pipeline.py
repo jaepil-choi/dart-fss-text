@@ -291,7 +291,9 @@ class DisclosurePipeline:
         stock_codes: Union[str, List[str]],
         years: Union[int, List[int]],
         report_type: str = "A001",
-        target_section_codes: Optional[List[str]] = None
+        target_section_codes: Optional[List[str]] = None,
+        skip_existing: bool = True,
+        base_dir: str = "data"
     ) -> Dict[str, int]:
         """
         Complete workflow: search → download → parse → store.
@@ -304,18 +306,24 @@ class DisclosurePipeline:
                                  If None, extracts all sections.
                                  If specified, only extracts matching sections.
                                  Example: ["020100"] for "1. 사업의 개요"
+            skip_existing: If True, skips year+stock_code combinations that already
+                          have downloaded data in base_dir/year/stock_code/.
+                          Saves API calls when resuming. (default: True)
+            base_dir: Base directory for downloads (default: "data")
         
         Returns:
             Statistics dictionary:
             {
                 'reports': 4,      # Reports successfully processed
                 'sections': 194,   # Total sections stored
-                'failed': 0        # Failed operations
+                'failed': 0,       # Failed operations
+                'skipped': 10      # Skipped (already downloaded)
             }
         
         Design:
             - Normalizes inputs (single → list)
             - Processes each company × year combination
+            - Skips already-downloaded data when skip_existing=True
             - Continues processing after individual failures (resilience)
             - Tracks statistics for monitoring
         
@@ -334,6 +342,14 @@ class DisclosurePipeline:
                 report_type="A001",
                 target_section_codes=["020100"]
             )
+            
+            # Resume after interruption (skips existing downloads)
+            stats = pipeline.download_and_parse(
+                stock_codes=all_stocks,
+                years=[2023],
+                report_type="A001",
+                skip_existing=True  # Default behavior
+            )
         """
         # Normalize inputs
         stock_codes = self._normalize_stock_codes(stock_codes)
@@ -341,6 +357,7 @@ class DisclosurePipeline:
         
         # Initialize statistics
         stats = self._init_statistics()
+        stats['skipped'] = 0  # Track skipped downloads
         
         logger.info(
             f"Starting pipeline: {len(stock_codes)} companies, "
@@ -350,6 +367,18 @@ class DisclosurePipeline:
         # Process each year and company
         for year in years:
             for stock_code in stock_codes:
+                # Check if already downloaded (skip to save API calls)
+                if skip_existing:
+                    data_dir = Path(base_dir) / str(year) / stock_code
+                    if data_dir.exists() and any(data_dir.iterdir()):
+                        filing_count = len(list(data_dir.iterdir()))
+                        logger.info(
+                            f"Skipping {stock_code} {year} - already downloaded "
+                            f"({filing_count} filing(s) found in {data_dir})"
+                        )
+                        stats['skipped'] += 1
+                        continue  # Skip to next stock_code
+                
                 try:
                     # Search filings
                     request = SearchFilingsRequest(
@@ -416,6 +445,23 @@ class DisclosurePipeline:
                     continue
                 
                 except Exception as e:
+                    # Check for API usage limit exceeded
+                    error_msg = str(e)
+                    if '사용한도를 초과하였습니다' in error_msg or 'OverQueryLimit' in str(type(e).__name__):
+                        logger.error(
+                            f"API usage limit exceeded (사용한도를 초과하였습니다). "
+                            f"Stopping pipeline immediately. "
+                            f"Last processed: {stock_code} {year}"
+                        )
+                        logger.info(
+                            f"Pipeline stopped early due to API limit. "
+                            f"Stats so far: {stats['reports']} reports, "
+                            f"{stats['sections']} sections, {stats['skipped']} skipped, "
+                            f"{stats['failed']} failed"
+                        )
+                        # Return stats immediately without continuing
+                        return stats
+                    
                     logger.error(
                         f"Failed to search filings for {stock_code} {year}: {e}",
                         exc_info=True
@@ -426,7 +472,8 @@ class DisclosurePipeline:
         
         logger.info(
             f"Pipeline complete: {stats['reports']} reports, "
-            f"{stats['sections']} sections, {stats['failed']} failures"
+            f"{stats['sections']} sections, {stats['skipped']} skipped, "
+            f"{stats['failed']} failures"
         )
         
         return stats
@@ -477,6 +524,7 @@ class DisclosurePipeline:
         return {
             'reports': 0,
             'sections': 0,
-            'failed': 0
+            'failed': 0,
+            'skipped': 0
         }
 
