@@ -53,7 +53,12 @@ print(f"  ✓ BackfillService ready")
 
 # === Step 4: Configure Backfill ===
 BASE_DIR = "data"
-TARGET_SECTIONS = ["020100"]  # Only Business Overview section
+
+# Target sections: Try 020100 first (newer reports), fall back to 020000 (older reports)
+# 020100 = "1. 사업의 개요" (Business Overview) - exists in 2015+
+# 020000 = "II. 사업의 내용" (Business Content) - flat section in 2010-2014
+TARGET_SECTIONS = ["020100", "020000"]  # Will extract whichever exists
+
 REPORT_TYPE = "A001"
 FORCE_REPARSE = False  # Set to True to re-parse existing data
 
