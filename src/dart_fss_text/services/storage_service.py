@@ -137,17 +137,25 @@ class StorageService:
             }
         
         except DuplicateKeyError as e:
+            # Truncate error message to prevent printing full documents
+            error_msg = str(e)
+            if len(error_msg) > 500:
+                error_msg = error_msg[:500] + "... (truncated)"
             return {
                 'success': False,
                 'inserted_count': 0,
-                'error': f"Duplicate key error: {str(e)}"
+                'error': f"Duplicate key error: {error_msg}"
             }
         
         except PyMongoError as e:
+            # Truncate error message to prevent printing full documents
+            error_msg = str(e)
+            if len(error_msg) > 500:
+                error_msg = error_msg[:500] + "... (truncated)"
             return {
                 'success': False,
                 'inserted_count': 0,
-                'error': f"MongoDB error: {str(e)}"
+                'error': f"MongoDB error: {error_msg}"
             }
     
     def get_section(self, rcept_no: str, section_code: str) -> Optional[Dict[str, Any]]:
@@ -239,10 +247,14 @@ class StorageService:
             }
         
         except PyMongoError as e:
+            # Truncate error message to prevent printing full documents  
+            error_msg = str(e)
+            if len(error_msg) > 500:
+                error_msg = error_msg[:500] + "... (truncated)"
             return {
                 'success': False,
                 'deleted_count': 0,
-                'error': f"MongoDB error: {str(e)}"
+                'error': f"MongoDB error: {error_msg}"
             }
     
     def upsert_sections(self, documents: List[SectionDocument]) -> Dict[str, Any]:
@@ -297,11 +309,15 @@ class StorageService:
             }
         
         except PyMongoError as e:
+            # Truncate error message to prevent printing full documents
+            error_msg = str(e)
+            if len(error_msg) > 500:
+                error_msg = error_msg[:500] + "... (truncated)"
             return {
                 'success': False,
                 'upserted_count': 0,
                 'modified_count': 0,
-                'error': f"MongoDB error: {str(e)}"
+                'error': f"MongoDB error: {error_msg}"
             }
     
     def get_sections_by_company(

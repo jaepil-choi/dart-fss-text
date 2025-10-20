@@ -241,6 +241,23 @@ class SectionDocument(BaseModel):
         data = self.model_dump()
         # MongoDB handles datetime objects directly
         return data
+    
+    def __repr__(self) -> str:
+        """
+        Custom repr that truncates text field to prevent terminal explosion.
+        
+        Shows first 200 chars of text with ellipsis if longer.
+        """
+        text_preview = self.text[:200] + "..." if len(self.text) > 200 else self.text
+        return (
+            f"SectionDocument("
+            f"document_id='{self.document_id}', "
+            f"corp_name='{self.corp_name}', "
+            f"section_code='{self.section_code}', "
+            f"section_title='{self.section_title}', "
+            f"text='{text_preview}', "
+            f"char_count={self.char_count})"
+        )
 
 
 def create_document_id(rcept_no: str, section_code: str) -> str:
