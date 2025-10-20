@@ -82,11 +82,13 @@ start_time = datetime.now()
 
 # Single method call to do everything!
 # Only extracts section 020100 to save storage and avoid MongoDB size limits
+# skip_existing=True by default - safe to re-run after interruption
 stats = pipeline.download_and_parse(
     stock_codes=["005930", "000660"],
     years=YEARS,
     report_type="A001",
-    target_section_codes=["020100"]  # Only extract "1. 사업의 개요"
+    target_section_codes=["020100"],  # Only extract "1. 사업의 개요"
+    skip_existing=True  # Skip already downloaded data (default, safe for resuming)
 )
 
 elapsed = (datetime.now() - start_time).total_seconds()
@@ -97,6 +99,7 @@ print()
 print("  Statistics:")
 print(f"    - Reports processed: {stats['reports']}")
 print(f"    - Sections stored: {stats['sections']}")
+print(f"    - Skipped (existing): {stats['skipped']}")
 print(f"    - Failed: {stats['failed']}")
 print()
 

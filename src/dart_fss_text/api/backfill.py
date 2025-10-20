@@ -11,9 +11,12 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import logging
 
+import dart_fss as dart
+
 from dart_fss_text.services.storage_service import StorageService
 from dart_fss_text.api.pipeline import parse_xml_to_sections
 from dart_fss_text.models.section import SectionDocument
+from dart_fss_text.config import get_app_config
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +40,30 @@ class BackfillService:
         
         Args:
             storage_service: Initialized StorageService instance
+        
+        Raises:
+            ValueError: If OPENDART_API_KEY is not set in config/environment
         """
         self.storage = storage_service
+        self._corp_list = None  # Lazy-loaded, cached corp list
+        
+        # Set API key for dart-fss (required for get_corp_list)
+        config = get_app_config()
+        if not config.opendart_api_key:
+            raise ValueError(
+                "OPENDART_API_KEY not found in environment. "
+                "Please set it in .env file or environment variables."
+            )
+        dart.set_api_key(api_key=config.opendart_api_key)
+    
+    @property
+    def corp_list(self):
+        """Lazy-load corp_list (Singleton, ~7s first time, instant after)."""
+        if self._corp_list is None:
+            logger.info("Loading corporation list (first time, ~7s)...")
+            self._corp_list = dart.get_corp_list()
+            logger.info("✓ Corporation list loaded")
+        return self._corp_list
     
     def check_exists(self, rcept_no: str) -> bool:
         """
@@ -148,16 +173,30 @@ class BackfillService:
                     
                     # Parse and insert
                     try:
-                        logger.info(f"Processing {xml_path}")
+                        logger.info(f"Processing {stock_code}/{year}/{rcept_no}")
+                        
+                        # Look up corp_code using cached corp_list (loaded once at startup)
+                        corp = self.corp_list.find_by_stock_code(stock_code)
+                        
+                        if corp is None:
+                            logger.warning(
+                                f"Stock code {stock_code} not found in DART. "
+                                f"Company may be delisted. Skipping {rcept_no}."
+                            )
+                            stats['failed'] += 1
+                            continue
+                        
+                        corp_code = corp.corp_code
+                        corp_name = corp.corp_name
                         
                         # Create mock filing object with required attributes
                         class MockFiling:
-                            def __init__(self, rcept_no, rcept_dt, corp_code, stock_code):
+                            def __init__(self, rcept_no, rcept_dt, corp_code, stock_code, corp_name):
                                 self.rcept_no = rcept_no
                                 self.rcept_dt = rcept_dt
                                 self.corp_code = corp_code
                                 self.stock_code = stock_code
-                                self.corp_name = ""  # Will be filled from XML if available
+                                self.corp_name = corp_name
                                 self.report_nm = f"사업보고서 ({year})"
                         
                         # Extract metadata from directory structure
@@ -167,8 +206,9 @@ class BackfillService:
                         filing = MockFiling(
                             rcept_no=rcept_no,
                             rcept_dt=rcept_dt,
-                            corp_code="",  # Not available from file path
-                            stock_code=stock_code
+                            corp_code=corp_code,
+                            stock_code=stock_code,
+                            corp_name=corp_name
                         )
                         
                         # Parse XML to sections
@@ -191,22 +231,24 @@ class BackfillService:
                             result = self.storage.insert_sections(sections)
                         
                         if result['success']:
+                            section_codes = [s.section_code for s in sections]
                             logger.info(
-                                f"✓ Inserted {len(sections)} sections from {rcept_no}"
+                                f"✓ Inserted {len(sections)} section(s) from {stock_code}/{year}/{rcept_no} "
+                                f"- Codes: {section_codes}"
                             )
                             stats['processed'] += 1
                             stats['sections'] += len(sections)
                         else:
                             logger.error(
-                                f"✗ Failed to insert {rcept_no}: {result.get('error')}"
+                                f"✗ Failed to insert {stock_code}/{year}/{rcept_no}: {result.get('error')}"
                             )
                             stats['failed'] += 1
                     
                     except Exception as e:
                         logger.error(
-                            f"✗ Failed to process {xml_path}: {e}",
-                            exc_info=True
+                            f"✗ Failed to process {stock_code}/{year}/{rcept_no}: {e}"
                         )
+                        logger.debug(f"Full error for {xml_path}:", exc_info=True)
                         stats['failed'] += 1
                         continue
         
@@ -217,4 +259,5 @@ class BackfillService:
         )
         
         return stats
+
 
