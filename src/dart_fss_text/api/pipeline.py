@@ -646,6 +646,13 @@ class DisclosurePipeline:
                     # Process each filing from API
                     for filing in filings:
                         try:
+                            # Check if this specific filing already in MongoDB
+                            existing_for_filing = self._storage.collection.count_documents({'rcept_no': filing.rcept_no})
+                            if existing_for_filing > 0:
+                                logger.debug(f"Skipping {filing.rcept_no} - already in MongoDB")
+                                stats['skipped'] += 1
+                                continue
+
                             # Download (pass company info for better logging)
                             xml_path = download_document(
                                 filing, 
