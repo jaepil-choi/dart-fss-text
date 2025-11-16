@@ -268,16 +268,20 @@ class CorpListService:
     def get_all_listed_stock_codes(self) -> List[str]:
         """
         Get all listed stock codes (companies with non-null stock_code).
-        
+
         Filters the cached DataFrame to return only companies that have
-        a stock_code (listed companies). Returns stock codes as strings.
-        
+        a valid stock_code (listed companies). Returns stock codes as strings.
+
+        Only returns purely numeric 6-digit stock codes. Stock codes with letters
+        (e.g., '0041J0' for preferred stocks) are excluded as they typically don't
+        have regular filings in DART API.
+
         Returns:
-            List of stock codes (e.g., ["005930", "000660", ...])
-            
+            List of valid stock codes (e.g., ["005930", "000660", ...])
+
         Raises:
             RuntimeError: If service not initialized
-            
+
         Example:
             >>> service = CorpListService()
             >>> service.initialize()
@@ -291,16 +295,20 @@ class CorpListService:
             raise RuntimeError(
                 "CorpListService not initialized. Call initialize() first."
             )
-        
+
         # Filter to only listed companies (stock_code not null)
         listed_corps = self._df[self._df['stock_code'].notna()]
-        
+
         # Convert to list of strings, removing any NaN values
         stock_codes = listed_corps['stock_code'].astype(str).tolist()
-        
-        # Filter out any invalid codes (e.g., 'nan' strings)
-        stock_codes = [code for code in stock_codes if code != 'nan' and len(code) == 6]
-        
+
+        # Filter out invalid codes: must be exactly 6 digits and numeric only
+        # Excludes stock codes with letters (e.g., '0041J0' for preferred stocks)
+        stock_codes = [
+            code for code in stock_codes
+            if code != 'nan' and len(code) == 6 and code.isdigit()
+        ]
+
         return stock_codes
     
     def get_latest_db_path(self) -> Optional[Path]:
@@ -341,7 +349,8 @@ class CorpListService:
             raise FileNotFoundError(f"CSV file not found: {csv_path}")
         
         logger.info(f"Loading corporation data from {csv_path}...")
-        self._df = pd.read_csv(csv_path, encoding='utf-8')
+        # Force stock_code to string to prevent pandas from converting to float
+        self._df = pd.read_csv(csv_path, encoding='utf-8', dtype={'stock_code': str}, low_memory=False)
         self._csv_path = csv_path
         
         # Note: When loading from CSV, we don't have Corp objects
