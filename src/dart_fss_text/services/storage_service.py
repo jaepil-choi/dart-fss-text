@@ -76,17 +76,29 @@ class StorageService:
         self.collection_name = collection or config.mongodb_collection
         
         # Connect to MongoDB
-        self.client = MongoClient(
-            self.mongo_uri,
-            serverSelectionTimeoutMS=5000  # 5 second timeout
-        )
-        
-        # Test connection
-        self.client.admin.command('ping')
-        
-        # Get database and collection
-        self.db = self.client[self.database_name]
-        self.collection = self.db[self.collection_name]
+        try:
+            self.client = MongoClient(
+                self.mongo_uri,
+                serverSelectionTimeoutMS=5000  # 5 second timeout
+            )
+            
+            # Test connection
+            self.client.admin.command('ping')
+            
+            # Get database and collection
+            self.db = self.client[self.database_name]
+            self.collection = self.db[self.collection_name]
+            
+        except ConnectionFailure as e:
+            raise ConnectionFailure(
+                f"❌ Failed to connect to MongoDB at {self.mongo_uri}. "
+                f"Please ensure MongoDB is running and accessible. "
+                f"Error: {str(e)}"
+            ) from e
+        except Exception as e:
+            raise ConnectionFailure(
+                f"❌ Unexpected error connecting to MongoDB: {str(e)}"
+            ) from e
     
     def insert_sections(self, documents: List[SectionDocument]) -> Dict[str, Any]:
         """
@@ -125,17 +137,25 @@ class StorageService:
             }
         
         except DuplicateKeyError as e:
+            # Truncate error message to prevent printing full documents
+            error_msg = str(e)
+            if len(error_msg) > 500:
+                error_msg = error_msg[:500] + "... (truncated)"
             return {
                 'success': False,
                 'inserted_count': 0,
-                'error': f"Duplicate key error: {str(e)}"
+                'error': f"Duplicate key error: {error_msg}"
             }
         
         except PyMongoError as e:
+            # Truncate error message to prevent printing full documents
+            error_msg = str(e)
+            if len(error_msg) > 500:
+                error_msg = error_msg[:500] + "... (truncated)"
             return {
                 'success': False,
                 'inserted_count': 0,
-                'error': f"MongoDB error: {str(e)}"
+                'error': f"MongoDB error: {error_msg}"
             }
     
     def get_section(self, rcept_no: str, section_code: str) -> Optional[Dict[str, Any]]:
@@ -227,10 +247,14 @@ class StorageService:
             }
         
         except PyMongoError as e:
+            # Truncate error message to prevent printing full documents  
+            error_msg = str(e)
+            if len(error_msg) > 500:
+                error_msg = error_msg[:500] + "... (truncated)"
             return {
                 'success': False,
                 'deleted_count': 0,
-                'error': f"MongoDB error: {str(e)}"
+                'error': f"MongoDB error: {error_msg}"
             }
     
     def upsert_sections(self, documents: List[SectionDocument]) -> Dict[str, Any]:
@@ -285,11 +309,15 @@ class StorageService:
             }
         
         except PyMongoError as e:
+            # Truncate error message to prevent printing full documents
+            error_msg = str(e)
+            if len(error_msg) > 500:
+                error_msg = error_msg[:500] + "... (truncated)"
             return {
                 'success': False,
                 'upserted_count': 0,
                 'modified_count': 0,
-                'error': f"MongoDB error: {str(e)}"
+                'error': f"MongoDB error: {error_msg}"
             }
     
     def get_sections_by_company(

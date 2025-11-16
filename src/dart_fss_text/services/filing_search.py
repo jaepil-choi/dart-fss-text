@@ -121,6 +121,17 @@ class FilingSearchService:
             # Convert stock code to corp object
             corp = corp_list.find_by_stock_code(stock_code)
             
+            # Check if corp exists (may be None for delisted companies)
+            if corp is None:
+                # Log warning and skip this stock code
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    f"Stock code {stock_code} not found in DART database. "
+                    f"Company may be delisted or not registered with DART."
+                )
+                continue
+            
             # Search each report type
             for report_type in request.report_types:
                 # Use Corp.search_filings() with correct parameters

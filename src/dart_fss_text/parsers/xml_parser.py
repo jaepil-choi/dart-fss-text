@@ -75,37 +75,58 @@ def build_section_index(
             ...
         }
     """
-    # Parse XML with encoding fallback (UTF-8 → EUC-KR)
-    # DART XML files are sometimes encoded in EUC-KR instead of UTF-8
+    # Parse XML with encoding fallback (EUC-KR → UTF-8)
+    # DART XML files declare UTF-8 but are actually encoded in EUC-KR
+    # We must read with explicit encoding, not rely on the XML declaration
     tree = None
     last_error = None
     
-    for encoding in ['utf-8', 'euc-kr']:
+    # Try EUC-KR first (most common for older DART files), then UTF-8
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    for encoding in ['euc-kr', 'utf-8', 'cp949']:
         try:
-            parser = etree.XMLParser(recover=True, huge_tree=True, encoding=encoding)
-            tree = etree.parse(str(xml_path), parser)
+            # Read file with explicit encoding
+            with open(str(xml_path), 'rb') as f:
+                raw_bytes = f.read()
+            
+            # Decode with specified encoding
+            decoded_text = raw_bytes.decode(encoding)
+            
+            # Parse the decoded text
+            parser = etree.XMLParser(recover=True, huge_tree=True)
+            tree = etree.fromstring(decoded_text.encode('utf-8'), parser)
+            logger.debug(f"Successfully parsed {xml_path.name} with encoding: {encoding}")
             break  # Success - stop trying
+            
+        except (UnicodeDecodeError, LookupError) as e:
+            # Encoding error - try next encoding
+            last_error = e
+            continue
         except etree.XMLSyntaxError as e:
-            if 'encoding' in str(e).lower():
-                # Encoding error - try next encoding
+            # Try to determine if it's an encoding issue
+            if 'encoding' in str(e).lower() or 'decode' in str(e).lower():
                 last_error = e
                 continue
             else:
-                # Non-encoding error - raise immediately
+                # Non-encoding XML syntax error - raise immediately
                 raise
         except Exception as e:
-            # Unexpected error - raise immediately
-            raise
+            # Unexpected error - log and try next encoding
+            last_error = e
+            continue
     
     if tree is None:
-        # Both encodings failed
+        # All encodings failed
         raise ValueError(
-            f"Failed to parse XML with UTF-8 or EUC-KR encoding. "
+            f"Failed to parse XML with EUC-KR, UTF-8, or CP949 encoding. "
             f"File: {xml_path}. "
             f"Last error: {last_error}"
         )
     
-    root = tree.getroot()
+    # tree is already the root element from fromstring()
+    root = tree
     
     # Initialize matcher if not provided
     if matcher is None:
