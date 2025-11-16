@@ -17,7 +17,7 @@
 
 ## 빠른 데모
 
-**20줄 미만의 코드로 사업보고서의 특정 섹션을 추출하고 조회하기:**
+**15줄 미만의 코드로 모든 상장사 사업보고서를 자동 수집하고 조회하기:**
 
 ```python
 from dart_fss_text import StorageService, DisclosurePipeline, TextQuery
@@ -25,20 +25,22 @@ from dart_fss_text import StorageService, DisclosurePipeline, TextQuery
 # 1. MongoDB 연결
 storage = StorageService()
 
-# 2. 보고서 다운로드 및 파싱
+# 2. 모든 상장사의 보고서 다운로드, 파싱, 저장 (자동화)
 pipeline = DisclosurePipeline(storage_service=storage)
 stats = pipeline.download_and_parse(
-    stock_codes=["005930", "000660"],  # 삼성전자, SK하이닉스
+    stock_codes="all",  # "all"이면 전체 상장사 자동 조회 (기본값)
     years=[2023, 2024],
     report_type="A001"  # 사업보고서 (연간) --> config/types.yaml 참조
 )
+# → 이미 다운로드된 XML이 있으면 자동으로 파싱하여 MongoDB에 추가
+# → MongoDB에 이미 있는 데이터는 건너뛰기 (skip_existing=True가 기본값)
 
 print(f"✓ {stats['reports']}개 보고서에서 {stats['sections']}개 섹션 저장 완료")
 
 # 3. 파싱된 텍스트 조회
 query = TextQuery(storage_service=storage)
 result = query.get(
-    stock_codes=["005930", "000660"],
+    stock_codes=["005930", "000660"],  # 특정 기업만 조회
     years=[2023, 2024],
     section_codes="020000"  # II. 사업의 내용 --> config/toc.yaml 참조
 ) # --> result: dictionary
@@ -94,10 +96,13 @@ COLLECTION_NAME=A001
 
 ### 📥 자동화된 데이터 파이프라인
 
+- **전체 상장사 지원**: `stock_codes="all"`로 KOSPI/KOSDAQ/KONEX 전체 상장사 자동 수집
 - **공시 검색**: 회사, 연도, 보고서 유형별 DART API 검색
 - **문서 다운로드**: 자동 ZIP 다운로드 및 XML 추출
 - **XML 파싱**: 계층 구조 재구성과 함께 섹션 추출
 - **MongoDB 저장**: 최적화된 스키마로 영구 저장
+- **자동 백필**: 이미 다운로드된 XML이 있으면 자동으로 파싱하여 MongoDB에 추가
+- **중복 방지**: MongoDB에 이미 있는 데이터는 건너뛰기 (`skip_existing=True` 기본값)
 - **텍스트 추출**: 표가 텍스트로 평탄화된 깨끗한 텍스트 (MVP)
 
 ### 🔍 유연한 쿼리 인터페이스
@@ -161,6 +166,23 @@ sequence.total_word_count  # 단어 수 합계
 ---
 
 ## 사용 예제
+
+### 예제 0: 전체 상장사 데이터 수집
+
+```python
+from dart_fss_text import StorageService, DisclosurePipeline
+
+pipeline = DisclosurePipeline(storage_service=StorageService())
+
+# 모든 상장사의 2024년 사업보고서 자동 수집 (2,900+ 기업)
+stats = pipeline.download_and_parse(
+    stock_codes="all",  # 기본값: 전체 상장사
+    years=2024
+)
+
+# 자동으로: 1) 전체 상장사 조회, 2) 기존 XML 백필, 3) 중복 건너뛰기
+# 실패한 기업은 data/failures/failures_2024.csv에 저장
+```
 
 ### 예제 1: 단일 회사, 단일 연도
 
@@ -280,6 +302,17 @@ for year, firms in result.items():
 from sklearn.metrics.pairwise import cosine_similarity
 similarity = cosine_similarity([embeddings["2024"]], [embeddings["2020"]])
 print(f"의미적 유사도 (2024 vs 2020): {similarity[0][0]:.3f}")
+```
+
+### 예제 6: 백필 서비스 (수동 백필이 필요한 경우)
+
+```python
+from dart_fss_text import BackfillService, StorageService
+
+# 이미 다운로드된 XML을 MongoDB로 수동 백필
+# (주의: DisclosurePipeline이 자동으로 백필하므로 일반적으로 불필요)
+backfill = BackfillService(StorageService())
+stats = backfill.backfill_from_directory("data", force=True)  # force=True로 재파싱
 ```
 
 ---
