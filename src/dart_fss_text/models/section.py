@@ -144,12 +144,12 @@ class SectionDocument(BaseModel):
         ...,
         description="Section text content (paragraphs + tables flattened to text)"
     )
-    
+
     # === Basic Statistics ===
     char_count: int = Field(
         ...,
         ge=0,
-        description="Total character count"
+        description="Total character count (before truncation if applied)"
     )
     
     word_count: int = Field(
@@ -170,6 +170,32 @@ class SectionDocument(BaseModel):
         examples=["1.0.0"]
     )
     
+    @field_validator('text')
+    @classmethod
+    def truncate_text_if_too_large(cls, v: str) -> str:
+        """
+        Truncate text if it exceeds safe MongoDB document size.
+
+        MongoDB has a 16MB BSON document limit. To stay well under this limit,
+        we truncate individual text fields to 50,000 characters (~150KB UTF-8).
+        This prevents "BSON document too large" errors.
+
+        Most sections are under 10KB. Sections exceeding 50K chars are likely
+        malformed (e.g., tables with embedded binary data or XML parsing errors).
+        """
+        MAX_TEXT_LENGTH = 50_000
+
+        if len(v) > MAX_TEXT_LENGTH:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                f"Text field truncated from {len(v):,} to {MAX_TEXT_LENGTH:,} chars "
+                f"to prevent MongoDB BSON size limit error"
+            )
+            return v[:MAX_TEXT_LENGTH] + "\n\n[... TRUNCATED - Original length: {:,} chars]".format(len(v))
+
+        return v
+
     @field_validator('document_id')
     @classmethod
     def validate_document_id_format(cls, v: str) -> str:
@@ -180,13 +206,13 @@ class SectionDocument(BaseModel):
                 f"document_id must be in format '{{rcept_no}}_{{section_code}}', "
                 f"got: '{v}'"
             )
-        
+
         rcept_no, section_code = parts
         if len(rcept_no) != 14 or not rcept_no.isdigit():
             raise ValueError(
                 f"rcept_no part must be 14 digits, got: '{rcept_no}'"
             )
-        
+
         return v
     
     @field_validator('section_path')
