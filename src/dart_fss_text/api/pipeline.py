@@ -477,7 +477,31 @@ class DisclosurePipeline:
             f"Starting pipeline: {len(stock_codes)} companies, "
             f"{len(years)} years, report_type={report_type}"
         )
-        
+
+        # Build set of existing (stock_code, year) combinations for fast lookup
+        # This avoids N queries to MongoDB (one per combination)
+        existing_combinations = set()
+        if skip_existing:
+            logger.info("Building index of existing data in MongoDB...")
+            # Query all distinct (stock_code, year) pairs in one go
+            pipeline_agg = [
+                {'$group': {
+                    '_id': {
+                        'stock_code': '$stock_code',
+                        'year': '$year'
+                    }
+                }}
+            ]
+            existing_docs = self._storage.collection.aggregate(pipeline_agg)
+            existing_combinations = {
+                (doc['_id']['stock_code'], doc['_id']['year'])
+                for doc in existing_docs
+            }
+            logger.info(
+                f"Found {len(existing_combinations)} existing (stock_code, year) "
+                f"combinations in MongoDB"
+            )
+
         # Process each year and company
         for year in years:
             failures_by_year[year] = []  # Initialize failure list for this year
@@ -485,21 +509,17 @@ class DisclosurePipeline:
                 # Get company name for logging
                 corp_data = self._corp_list_service.find_by_stock_code(stock_code)
                 corp_name = corp_data.get('corp_name', 'Unknown') if corp_data else 'Unknown'
-                
+
                 logger.info(
                     f"Processing {stock_code} ({corp_name}) - Year {year}"
                 )
-                
-                # Check if data already exists in MongoDB (correct check)
+
+                # Check if data already exists in MongoDB (fast set lookup)
                 if skip_existing:
-                    existing_sections = self._storage.get_sections_by_company(
-                        stock_code=stock_code,
-                        year=str(year)
-                    )
-                    if existing_sections:
+                    if (stock_code, str(year)) in existing_combinations:
                         logger.info(
                             f"Skipping {stock_code} ({corp_name}) {year} - "
-                            f"already in MongoDB ({len(existing_sections)} sections found)"
+                            f"already in MongoDB"
                         )
                         stats['skipped'] += 1
                         continue  # Skip to next stock_code
