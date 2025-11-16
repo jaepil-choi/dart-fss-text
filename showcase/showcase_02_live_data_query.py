@@ -78,9 +78,18 @@ if not config.opendart_api_key:
 # Set DART API key
 dart.set_api_key(config.opendart_api_key)
 
-# === Step 2: Initialize Services ===
+# === Step 2: Initialize CorpListService ===
 
-print("\n[Step 2] Initializing services...")
+print("\n[Step 2] Initializing CorpListService...")
+from dart_fss_text import initialize_corp_list
+
+csv_path = initialize_corp_list()
+print(f"  ✓ CorpListService initialized")
+print(f"  ✓ CSV saved to: {csv_path}")
+
+# === Step 3: Initialize Services ===
+
+print("\n[Step 3] Initializing services...")
 # Use config facade (no need to pass parameters)
 storage = StorageService()
 
@@ -91,18 +100,24 @@ print("  ✓ StorageService initialized")
 print("  ✓ TextQuery initialized")
 print("  ✓ FilingSearchService initialized")
 
-# === Step 3: Clear Existing Data ===
+# === Step 4: Clear Existing Data ===
 
-print("\n[Step 3] Clearing existing data...")
+print("\n[Step 4] Clearing existing data...")
+print("  ⚠️  WARNING: This will delete ALL data from the collection!")
+print(f"  Collection: {config.mongodb_database}.{config.mongodb_collection}")
+print("  Press Ctrl+C to cancel, or wait 3 seconds to continue...")
+import time
+time.sleep(3)
+
 try:
     deleted = storage.collection.delete_many({})
     print(f"  ✓ Cleared {deleted.deleted_count} existing documents")
 except Exception as e:
     print(f"  Note: Could not clear data: {e}")
 
-# === Step 4: Download and Parse Reports ===
+# === Step 5: Download and Parse Reports ===
 
-print("\n[Step 4] Downloading and parsing reports from DART...")
+print("\n[Step 5] Downloading and parsing reports from DART...")
 
 download_base = Path("data")
 download_base.mkdir(parents=True, exist_ok=True)
@@ -261,9 +276,9 @@ if total_sections == 0:
     print("\n❌ No sections were stored. Cannot proceed with showcase.")
     sys.exit(1)
 
-# === Step 5: Reconstruct Hierarchy ===
+# === Step 6: Reconstruct Hierarchy ===
 
-print("\n[Step 5] Reconstructing section hierarchy...")
+print("\n[Step 6] Reconstructing section hierarchy...")
 try:
     # Get all sections
     all_sections_data = list(storage.collection.find({}))
@@ -313,7 +328,7 @@ try:
 except Exception as e:
     print(f"  ⚠️  Hierarchy reconstruction failed: {e}")
 
-# === Step 6: USE CASE 1 - Single Firm, Single Year ===
+# === Step 7: USE CASE 1 - Single Firm, Single Year ===
 
 print("\n" + "=" * 80)
 print("USE CASE 1: Single Firm, Single Year, Single Section")
@@ -340,7 +355,7 @@ try:
 except Exception as e:
     print(f"  ❌ Error: {e}")
 
-# === Step 7: USE CASE 2 - Cross-Sectional Analysis ===
+# === Step 8: USE CASE 2 - Cross-Sectional Analysis ===
 
 print("\n" + "=" * 80)
 print("USE CASE 2: Cross-Sectional Analysis (Multiple Firms, Single Year)")
@@ -366,7 +381,7 @@ try:
 except Exception as e:
     print(f"  ❌ Error: {e}")
 
-# === Step 8: USE CASE 3 - Time Series Analysis ===
+# === Step 9: USE CASE 3 - Time Series Analysis ===
 
 print("\n" + "=" * 80)
 print("USE CASE 3: Time Series Analysis (Single Firm, Multiple Years)")
@@ -393,7 +408,7 @@ try:
 except Exception as e:
     print(f"  ❌ Error: {e}")
 
-# === Step 9: USE CASE 4 - Panel Data ===
+# === Step 10: USE CASE 4 - Panel Data ===
 
 print("\n" + "=" * 80)
 print("USE CASE 4: Panel Data (Multiple Firms, Multiple Years)")
@@ -419,7 +434,7 @@ try:
 except Exception as e:
     print(f"  ❌ Error: {e}")
 
-# === Step 10: Data Statistics ===
+# === Step 11: Data Statistics ===
 
 print("\n" + "=" * 80)
 print("DATA STATISTICS")
@@ -463,7 +478,7 @@ try:
 except Exception as e:
     print(f"  ⚠️  Could not generate statistics: {e}")
 
-# === Step 11: Data Location ===
+# === Step 12: Data Location ===
 
 print("\n" + "=" * 80)
 print("DATA LOCATION")

@@ -14,11 +14,15 @@ import zipfile
 from pathlib import Path
 from typing import List, Dict, Optional
 from dataclasses import dataclass
+import logging
 
-import dart_fss as dart
 from dart_fss.utils import request
 from dart_fss.auth import get_api_key
 from lxml import etree
+
+from dart_fss_text.services.corp_list_service import CorpListService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -57,26 +61,30 @@ class DocumentDownloadService:
         
         Args:
             base_dir: Base directory for downloaded files
+            
+        Raises:
+            RuntimeError: If CorpListService not initialized
         """
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
         
-        # Load corp_list once for stock_code lookups (Singleton pattern)
-        self._corp_list = None
-    
-    @property
-    def corp_list(self):
-        """Lazy-load corp_list (Singleton, ~7s first time)."""
-        if self._corp_list is None:
-            self._corp_list = dart.get_corp_list()
-        return self._corp_list
+        # Use CorpListService for cached corp lookups
+        self._corp_list_service = CorpListService()
+        
+        # Check if initialized (for cached lookups)
+        if not self._corp_list_service._initialized:
+            raise RuntimeError(
+                "CorpListService not initialized. "
+                "Call CorpListService().initialize() first."
+            )
     
     def download_filing(
         self,
         rcept_no: str,
         rcept_dt: str,
         corp_code: str,
-        report_nm: Optional[str] = None
+        report_nm: Optional[str] = None,
+        fallback: bool = True
     ) -> DownloadResult:
         """
         Download and extract a single filing.
@@ -86,22 +94,33 @@ class DocumentDownloadService:
             rcept_dt: Receipt date (YYYYMMDD) - used for PIT year
             corp_code: Corporation code (8 digits)
             report_nm: Report name (for logging)
+            fallback: If True, use first available XML if main XML not found (default: True)
         
         Returns:
             DownloadResult with status and file paths
         
         Raises:
             FileNotFoundError: If download or extraction fails
-            ValueError: If main XML not found in ZIP
+            ValueError: If main XML not found in ZIP and fallback=False
         """
         import time
         
         # Extract PIT metadata
         year = rcept_dt[:4]
         
-        # Get stock_code for directory structure
-        corp = self.corp_list.find_by_corp_code(corp_code)
-        stock_code = corp.stock_code if corp and corp.stock_code else corp_code
+        # Get stock_code and company name for logging using cached CorpListService
+        corp_data = self._corp_list_service.find_by_corp_code(corp_code)
+        if corp_data:
+            stock_code = corp_data.get('stock_code') or corp_code
+            corp_name = corp_data.get('corp_name', 'Unknown')
+        else:
+            # Fallback: use corp_code as stock_code if not found in cache
+            stock_code = corp_code
+            corp_name = 'Unknown'
+        
+        logger.debug(
+            f"Downloading {rcept_no} for {stock_code} ({corp_name})"
+        )
         
         # Create PIT-aware directory structure
         filing_dir = self.base_dir / year / stock_code / rcept_no
@@ -112,6 +131,9 @@ class DocumentDownloadService:
         if main_xml.exists():
             # Already exists, return existing files
             xml_files = sorted(filing_dir.glob("*.xml"))
+            logger.debug(
+                f"Filing {rcept_no} ({stock_code} - {corp_name}) already exists, skipping download"
+            )
             return DownloadResult(
                 rcept_no=rcept_no,
                 rcept_dt=rcept_dt,
@@ -131,16 +153,34 @@ class DocumentDownloadService:
             'rcept_no': rcept_no,
         }
         
-        request.download(url=url, path=str(filing_dir) + "/", payload=payload)
+        logger.debug(
+            f"Requesting download for {rcept_no} ({stock_code} - {corp_name})"
+        )
+        
+        try:
+            request.download(url=url, path=str(filing_dir) + "/", payload=payload)
+        except FileNotFoundError as e:
+            logger.error(
+                f"Download request failed for {rcept_no} ({stock_code} - {corp_name}): {e}"
+            )
+            raise FileNotFoundError(
+                f"Download failed for {rcept_no} ({stock_code} - {corp_name}): {e}"
+            ) from e
         
         download_time = time.time() - start_time
         
         # Verify ZIP exists
         zip_path = filing_dir / f"{rcept_no}.zip"
         if not zip_path.exists():
-            raise FileNotFoundError(f"Download failed: ZIP not found at {zip_path}")
+            error_msg = f"Download failed: ZIP not found at {zip_path} for {rcept_no} ({stock_code} - {corp_name})"
+            logger.error(error_msg)
+            raise FileNotFoundError(error_msg)
         
         zip_size_mb = zip_path.stat().st_size / (1024 * 1024)
+        logger.debug(
+            f"ZIP downloaded for {rcept_no} ({stock_code} - {corp_name}): "
+            f"{zip_size_mb:.2f} MB in {download_time:.2f}s"
+        )
         
         # Extract all XMLs from ZIP
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
@@ -148,7 +188,14 @@ class DocumentDownloadService:
             xml_files_in_zip = [f for f in all_files if f.endswith('.xml')]
             
             if len(xml_files_in_zip) == 0:
-                raise ValueError(f"No XML files found in ZIP. Contents: {all_files}")
+                error_msg = f"No XML files found in ZIP for {rcept_no} ({stock_code} - {corp_name}). Contents: {all_files}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            logger.debug(
+                f"Found {len(xml_files_in_zip)} XML file(s) in ZIP for {rcept_no} ({stock_code} - {corp_name}): "
+                f"{xml_files_in_zip}"
+            )
             
             # Extract all XMLs
             for xml_file in xml_files_in_zip:
@@ -156,10 +203,33 @@ class DocumentDownloadService:
         
         # Verify main XML exists
         if not main_xml.exists():
-            raise FileNotFoundError(
-                f"Main XML not found: {rcept_no}.xml\n"
-                f"Available XMLs: {xml_files_in_zip}"
-            )
+            if fallback and xml_files_in_zip:
+                # Use first available XML as fallback
+                fallback_xml_name = xml_files_in_zip[0]
+                fallback_xml_path = filing_dir / fallback_xml_name
+                
+                if fallback_xml_path.exists():
+                    logger.warning(
+                        f"Main XML not found for {rcept_no} ({stock_code} - {corp_name}), "
+                        f"using fallback: {fallback_xml_name}. "
+                        f"Available XMLs: {xml_files_in_zip}"
+                    )
+                    main_xml = fallback_xml_path
+                else:
+                    error_msg = (
+                        f"Main XML not found for {rcept_no} ({stock_code} - {corp_name}): {rcept_no}.xml\n"
+                        f"Fallback XML also not found: {fallback_xml_name}\n"
+                        f"Available XMLs: {xml_files_in_zip}"
+                    )
+                    logger.error(error_msg)
+                    raise FileNotFoundError(error_msg)
+            else:
+                error_msg = (
+                    f"Main XML not found for {rcept_no} ({stock_code} - {corp_name}): {rcept_no}.xml\n"
+                    f"Available XMLs: {xml_files_in_zip}"
+                )
+                logger.error(error_msg)
+                raise FileNotFoundError(error_msg)
         
         # Cleanup ZIP
         zip_path.unlink()

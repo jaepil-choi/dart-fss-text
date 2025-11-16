@@ -11,12 +11,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import logging
 
-import dart_fss as dart
-
 from dart_fss_text.services.storage_service import StorageService
 from dart_fss_text.api.pipeline import parse_xml_to_sections
 from dart_fss_text.models.section import SectionDocument
 from dart_fss_text.config import get_app_config
+from dart_fss_text.services.corp_list_service import CorpListService
 
 logger = logging.getLogger(__name__)
 
@@ -42,28 +41,17 @@ class BackfillService:
             storage_service: Initialized StorageService instance
         
         Raises:
-            ValueError: If OPENDART_API_KEY is not set in config/environment
+            RuntimeError: If CorpListService not initialized
         """
         self.storage = storage_service
-        self._corp_list = None  # Lazy-loaded, cached corp list
+        self._corp_list_service = CorpListService()
         
-        # Set API key for dart-fss (required for get_corp_list)
-        config = get_app_config()
-        if not config.opendart_api_key:
-            raise ValueError(
-                "OPENDART_API_KEY not found in environment. "
-                "Please set it in .env file or environment variables."
+        # Check if CorpListService is initialized (for cached lookups)
+        if not self._corp_list_service._initialized:
+            raise RuntimeError(
+                "CorpListService not initialized. "
+                "Call CorpListService().initialize() first."
             )
-        dart.set_api_key(api_key=config.opendart_api_key)
-    
-    @property
-    def corp_list(self):
-        """Lazy-load corp_list (Singleton, ~7s first time, instant after)."""
-        if self._corp_list is None:
-            logger.info("Loading corporation list (first time, ~7s)...")
-            self._corp_list = dart.get_corp_list()
-            logger.info("✓ Corporation list loaded")
-        return self._corp_list
     
     def check_exists(self, rcept_no: str) -> bool:
         """
@@ -175,10 +163,10 @@ class BackfillService:
                     try:
                         logger.info(f"Processing {stock_code}/{year}/{rcept_no}")
                         
-                        # Look up corp_code using cached corp_list (loaded once at startup)
-                        corp = self.corp_list.find_by_stock_code(stock_code)
+                        # Look up corp data using cached CorpListService (includes delisted companies)
+                        corp_data = self._corp_list_service.find_by_stock_code(stock_code)
                         
-                        if corp is None:
+                        if corp_data is None:
                             logger.warning(
                                 f"Stock code {stock_code} not found in DART. "
                                 f"Company may be delisted. Skipping {rcept_no}."
@@ -186,8 +174,9 @@ class BackfillService:
                             stats['failed'] += 1
                             continue
                         
-                        corp_code = corp.corp_code
-                        corp_name = corp.corp_name
+                        # Extract needed fields from cache (no Corp object needed)
+                        corp_code = corp_data['corp_code']
+                        corp_name = corp_data['corp_name']
                         
                         # Create mock filing object with required attributes
                         class MockFiling:

@@ -18,10 +18,62 @@ from dart_fss_text.services.filing_search import FilingSearchService
 from dart_fss_text.models.requests import SearchFilingsRequest
 
 
+@pytest.fixture
+def mock_corp_list_service():
+    """Mock CorpListService for tests."""
+    mock_service = Mock()
+    
+    # Mock find_by_stock_code to return dict
+    def find_by_stock_code(stock_code):
+        if stock_code == "005930":
+            return {
+                'corp_code': '00126380',
+                'corp_name': '삼성전자',
+                'stock_code': '005930'
+            }
+        elif stock_code == "000660":
+            return {
+                'corp_code': '00118332',
+                'corp_name': 'SK하이닉스',
+                'stock_code': '000660'
+            }
+        return None
+    
+    mock_service.find_by_stock_code = find_by_stock_code
+    
+    # Mock get_corp_list to return CorpList with Corp objects
+    # Note: Corp objects are still needed for search_filings() method
+    mock_corp_list = Mock()
+    
+    # Samsung Corp object
+    mock_samsung_corp = Mock()
+    mock_samsung_corp.corp_code = "00126380"
+    mock_samsung_corp.corp_name = "삼성전자"
+    mock_samsung_corp.search_filings = Mock(return_value=[])
+    
+    # SK Hynix Corp object
+    mock_hynix_corp = Mock()
+    mock_hynix_corp.corp_code = "00118332"
+    mock_hynix_corp.corp_name = "SK하이닉스"
+    mock_hynix_corp.search_filings = Mock(return_value=[])
+    
+    def find_by_stock_code_corp(stock_code, include_delisting=True):
+        if stock_code == "005930":
+            return mock_samsung_corp
+        elif stock_code == "000660":
+            return mock_hynix_corp
+        return None
+    
+    mock_corp_list.find_by_stock_code = Mock(side_effect=find_by_stock_code_corp)
+    mock_service.get_corp_list = Mock(return_value=mock_corp_list)
+    
+    return mock_service
+
+
 @pytest.fixture(autouse=True)
-def mock_dart_get_corp_list():
+def mock_corp_list_service_init(mock_corp_list_service):
     """
-    Auto-mock dart.get_corp_list() for ALL tests in this file.
+    Auto-mock CorpListService for ALL tests in this file.
     
     This prevents unit tests from making live API calls that:
     - Take 7+ seconds on first call
@@ -31,14 +83,8 @@ def mock_dart_get_corp_list():
     Each test can override this mock if needed by adding its own
     @patch decorator.
     """
-    with patch('dart_fss_text.services.filing_search.dart.get_corp_list') as mock:
-        # Setup a basic mock that returns a usable corp_list
-        mock_corp_list = Mock()
-        mock_corp = Mock()
-        mock_corp.search_filings = Mock(return_value=[])
-        mock_corp_list.find_by_stock_code = Mock(return_value=mock_corp)
-        mock.return_value = mock_corp_list
-        yield mock
+    with patch('dart_fss_text.services.filing_search.CorpListService', return_value=mock_corp_list_service):
+        yield mock_corp_list_service
 
 
 class TestFilingSearchServiceInitialization:
@@ -84,19 +130,8 @@ class TestSearchFilingsMethodSignature:
 class TestStockCodeToCorpCodeLookup:
     """Test conversion from stock_code to corp_code using dart-fss."""
     
-    @patch('dart_fss_text.services.filing_search.dart.get_corp_list')
-    def test_uses_dart_fss_get_corp_list(self, mock_get_corp_list):
-        """Should use dart-fss Singleton to get corp list."""
-        # Mock the corp list
-        mock_corp_list = Mock()
-        mock_corp = Mock()
-        mock_corp.corp_code = "00126380"
-        mock_corp.corp_name = "삼성전자"
-        mock_corp.search_filings = Mock(return_value=[])
-        
-        mock_corp_list.find_by_stock_code = Mock(return_value=mock_corp)
-        mock_get_corp_list.return_value = mock_corp_list
-        
+    def test_uses_corp_list_service(self, mock_corp_list_service_init):
+        """Should use CorpListService for cached lookups."""
         # Create service and search
         service = FilingSearchService()
         request = SearchFilingsRequest(
@@ -108,16 +143,19 @@ class TestStockCodeToCorpCodeLookup:
         
         service.search_filings(request)
         
-        # Verify dart.get_corp_list() was called (Singleton pattern)
-        mock_get_corp_list.assert_called_once()
+        # Verify CorpListService.find_by_stock_code was called
+        mock_corp_list_service_init.find_by_stock_code.assert_called_with("005930")
         
-        # Verify find_by_stock_code was called with correct stock code
-        mock_corp_list.find_by_stock_code.assert_called_with("005930")
+        # Verify get_corp_list was called to get Corp object for search_filings
+        mock_corp_list_service_init.get_corp_list.assert_called()
+        
+        # Verify CorpList.find_by_stock_code was called with include_delisting=True
+        corp_list = mock_corp_list_service_init.get_corp_list.return_value
+        corp_list.find_by_stock_code.assert_called_with("005930", include_delisting=True)
     
-    @patch('dart_fss_text.services.filing_search.dart.get_corp_list')
-    def test_handles_multiple_stock_codes(self, mock_get_corp_list):
+    def test_handles_multiple_stock_codes(self, mock_corp_list_service_init):
         """Should look up multiple stock codes."""
-        # Mock corp list with multiple companies
+        # Setup mock to handle multiple stock codes
         mock_corp_list = Mock()
         
         # Samsung
@@ -130,16 +168,16 @@ class TestStockCodeToCorpCodeLookup:
         mock_hynix.corp_code = "00164779"
         mock_hynix.search_filings = Mock(return_value=[])
         
-        def find_by_code(stock_code):
+        def find_by_code(stock_code, include_delisting=True):
             if stock_code == "005930":
                 return mock_samsung
             elif stock_code == "000660":
                 return mock_hynix
             else:
-                raise ValueError(f"Unknown stock code: {stock_code}")
+                return None
         
         mock_corp_list.find_by_stock_code = Mock(side_effect=find_by_code)
-        mock_get_corp_list.return_value = mock_corp_list
+        mock_corp_list_service_init.get_corp_list.return_value = mock_corp_list
         
         # Search multiple companies
         service = FilingSearchService()
@@ -152,31 +190,35 @@ class TestStockCodeToCorpCodeLookup:
         
         service.search_filings(request)
         
-        # Verify both lookups happened
+        # Verify both cache lookups happened
+        assert mock_corp_list_service_init.find_by_stock_code.call_count == 2
+        mock_corp_list_service_init.find_by_stock_code.assert_any_call("005930")
+        mock_corp_list_service_init.find_by_stock_code.assert_any_call("000660")
+        
+        # Verify both Corp object lookups happened with include_delisting=True
         assert mock_corp_list.find_by_stock_code.call_count == 2
-        mock_corp_list.find_by_stock_code.assert_any_call("005930")
-        mock_corp_list.find_by_stock_code.assert_any_call("000660")
+        mock_corp_list.find_by_stock_code.assert_any_call("005930", include_delisting=True)
+        mock_corp_list.find_by_stock_code.assert_any_call("000660", include_delisting=True)
 
 
 class TestFilingSearch:
     """Test actual filing search using Corp.search_filings()."""
     
-    @patch('dart_fss_text.services.filing_search.dart.get_corp_list')
-    def test_calls_corp_search_filings_with_correct_params(self, mock_get_corp_list):
+    def test_calls_corp_search_filings_with_correct_params(self, mock_corp_list_service_init):
         """
         Should call Corp.search_filings() with bgn_de and pblntf_detail_ty.
         
         From Experiment 7: Corp.search_filings(bgn_de, pblntf_detail_ty) is the
         correct method that returns Filing objects.
         """
-        # Mock corp
+        # Setup mock CorpList with Corp object
         mock_corp_list = Mock()
         mock_corp = Mock()
         mock_corp.corp_code = "00126380"
         mock_corp.search_filings = Mock(return_value=[])
         
         mock_corp_list.find_by_stock_code = Mock(return_value=mock_corp)
-        mock_get_corp_list.return_value = mock_corp_list
+        mock_corp_list_service_init.get_corp_list.return_value = mock_corp_list
         
         # Search
         service = FilingSearchService()
@@ -195,9 +237,11 @@ class TestFilingSearch:
             end_de="20241231",
             pblntf_detail_ty="A001"
         )
+        
+        # Verify cache lookup happened first
+        mock_corp_list_service_init.find_by_stock_code.assert_called_with("005930")
     
-    @patch('dart_fss_text.services.filing_search.dart.get_corp_list')
-    def test_searches_multiple_report_types(self, mock_get_corp_list):
+    def test_searches_multiple_report_types(self, mock_corp_list_service_init):
         """
         Should search each report type separately.
         
@@ -221,7 +265,7 @@ class TestFilingSearch:
         
         mock_corp.search_filings = Mock(side_effect=mock_search)
         mock_corp_list.find_by_stock_code = Mock(return_value=mock_corp)
-        mock_get_corp_list.return_value = mock_corp_list
+        mock_corp_list_service_init.get_corp_list.return_value = mock_corp_list
         
         # Search multiple report types
         service = FilingSearchService()
@@ -240,8 +284,7 @@ class TestFilingSearch:
         # Should aggregate results from all searches
         assert len(results) == 3
     
-    @patch('dart_fss_text.services.filing_search.dart.get_corp_list')
-    def test_aggregates_results_from_multiple_companies_and_types(self, mock_get_corp_list):
+    def test_aggregates_results_from_multiple_companies_and_types(self, mock_corp_list_service_init):
         """
         Should aggregate all results across companies and report types.
         
@@ -260,11 +303,11 @@ class TestFilingSearch:
             Mock(corp_code="00164779")
         ])
         
-        def find_by_code(stock_code):
+        def find_by_code(stock_code, include_delisting=True):
             return mock_corp1 if stock_code == "005930" else mock_corp2
         
         mock_corp_list.find_by_stock_code = Mock(side_effect=find_by_code)
-        mock_get_corp_list.return_value = mock_corp_list
+        mock_corp_list_service_init.get_corp_list.return_value = mock_corp_list
         
         # Search 2 companies × 2 report types
         service = FilingSearchService()
@@ -284,8 +327,7 @@ class TestFilingSearch:
 class TestFilingSearchResults:
     """Test the structure and content of search results."""
     
-    @patch('dart_fss_text.services.filing_search.dart.get_corp_list')
-    def test_returns_filing_objects_with_required_fields(self, mock_get_corp_list):
+    def test_returns_filing_objects_with_required_fields(self, mock_corp_list_service_init):
         """
         Results should have rcept_no, rcept_dt, corp_code, report_nm.
         
@@ -304,7 +346,7 @@ class TestFilingSearchResults:
         mock_corp.search_filings = Mock(return_value=[mock_filing])
         
         mock_corp_list.find_by_stock_code = Mock(return_value=mock_corp)
-        mock_get_corp_list.return_value = mock_corp_list
+        mock_corp_list_service_init.get_corp_list.return_value = mock_corp_list
         
         # Search
         service = FilingSearchService()
@@ -334,14 +376,15 @@ class TestFilingSearchResults:
 class TestErrorHandling:
     """Test error handling for edge cases."""
     
-    @patch('dart_fss_text.services.filing_search.dart.get_corp_list')
-    def test_raises_error_on_invalid_stock_code(self, mock_get_corp_list):
-        """Should raise error if stock code is not found."""
-        mock_corp_list = Mock()
-        mock_corp_list.find_by_stock_code = Mock(
-            side_effect=ValueError("Stock code not found")
-        )
-        mock_get_corp_list.return_value = mock_corp_list
+    def test_handles_invalid_stock_code(self, mock_corp_list_service_init):
+        """Should skip invalid stock code and continue."""
+        # Mock cache returns None for invalid stock code
+        def find_by_stock_code(stock_code):
+            if stock_code == "999999":
+                return None
+            return {'corp_code': '00126380', 'corp_name': '삼성전자', 'stock_code': '005930'}
+        
+        mock_corp_list_service_init.find_by_stock_code = Mock(side_effect=find_by_stock_code)
         
         service = FilingSearchService()
         request = SearchFilingsRequest(
@@ -351,12 +394,11 @@ class TestErrorHandling:
             report_types=["A001"]
         )
         
-        # Should propagate the error
-        with pytest.raises(ValueError, match="Stock code not found"):
-            service.search_filings(request)
+        # Should return empty list (not raise error)
+        results = service.search_filings(request)
+        assert results == []
     
-    @patch('dart_fss_text.services.filing_search.dart.get_corp_list')
-    def test_handles_empty_search_results(self, mock_get_corp_list):
+    def test_handles_empty_search_results(self, mock_corp_list_service_init):
         """
         Should return empty list if no filings found.
         
@@ -367,7 +409,7 @@ class TestErrorHandling:
         mock_corp.search_filings = Mock(return_value=[])  # No results
         
         mock_corp_list.find_by_stock_code = Mock(return_value=mock_corp)
-        mock_get_corp_list.return_value = mock_corp_list
+        mock_corp_list_service_init.get_corp_list.return_value = mock_corp_list
         
         service = FilingSearchService()
         request = SearchFilingsRequest(
@@ -387,20 +429,19 @@ class TestErrorHandling:
 class TestPerformanceConsiderations:
     """Test performance-related behavior."""
     
-    @patch('dart_fss_text.services.filing_search.dart.get_corp_list')
-    def test_get_corp_list_called_only_once_per_search(self, mock_get_corp_list):
+    def test_corp_list_service_called_efficiently(self, mock_corp_list_service_init):
         """
-        Should leverage dart-fss Singleton pattern.
+        Should use CorpListService efficiently.
         
-        From Experiment 6: dart.get_corp_list() is a Singleton - first call
-        takes ~7s, subsequent calls are instant (0.000ms).
+        CorpListService uses cached DataFrame lookups (<1ms) and only
+        calls get_corp_list() once to get Corp objects for search_filings().
         """
         mock_corp_list = Mock()
         mock_corp = Mock()
         mock_corp.search_filings = Mock(return_value=[])
         
         mock_corp_list.find_by_stock_code = Mock(return_value=mock_corp)
-        mock_get_corp_list.return_value = mock_corp_list
+        mock_corp_list_service_init.get_corp_list.return_value = mock_corp_list
         
         service = FilingSearchService()
         
@@ -414,21 +455,19 @@ class TestPerformanceConsiderations:
         
         service.search_filings(request)
         
-        # get_corp_list should be called only once (Singleton pattern)
-        # Even though we're searching 2 companies × 2 report types = 4 searches
-        assert mock_get_corp_list.call_count == 1
+        # get_corp_list should be called only once (for Corp objects)
+        # Cache lookups happen separately (fast DataFrame queries)
+        assert mock_corp_list_service_init.get_corp_list.call_count == 1
+        
+        # Cache find_by_stock_code called for each stock code
+        assert mock_corp_list_service_init.find_by_stock_code.call_count == 2
 
 
 class TestInputValidation:
     """Test that service properly uses validated inputs."""
     
-    @patch('dart_fss_text.services.filing_search.dart.get_corp_list')
-    def test_rejects_invalid_request_object(self, mock_get_corp_list):
+    def test_rejects_invalid_request_object(self, mock_corp_list_service_init):
         """Should only accept SearchFilingsRequest, not arbitrary dicts."""
-        # Setup mock to avoid live API call
-        mock_corp_list = Mock()
-        mock_get_corp_list.return_value = mock_corp_list
-        
         service = FilingSearchService()
         
         # Invalid input (plain dict instead of validated model)

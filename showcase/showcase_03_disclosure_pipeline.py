@@ -50,28 +50,52 @@ print(f"    - Database: {config.mongodb_database}")
 print(f"    - Collection: {config.mongodb_collection}")
 print(f"    - API Key: {'***' + config.opendart_api_key[-4:]}")
 
-# === Step 2: Initialize StorageService (Explicit DB Control) ===
+# === Step 2: Initialize CorpListService ===
 
-print("\n[Step 2] Initializing StorageService...")
+print("\n[Step 2] Initializing CorpListService...")
+from dart_fss_text import initialize_corp_list
+
+csv_path = initialize_corp_list()
+print(f"  ✓ CorpListService initialized")
+print(f"  ✓ CSV saved to: {csv_path}")
+
+# === Step 3: Initialize StorageService (Explicit DB Control) ===
+
+print("\n[Step 3] Initializing StorageService...")
 storage = StorageService()
 print(f"  ✓ Connected to MongoDB: {config.mongodb_database}.{config.mongodb_collection}")
 
-# Clear previous showcase data
-print("  - Clearing previous data...")
-storage.collection.delete_many({})
-print(f"  ✓ Collection cleared")
+# Clear previous showcase data (only for companies/years being processed)
+print("  - Clearing previous showcase data...")
+print("  ⚠️  WARNING: This will delete data for Samsung (005930) and SK Hynix (000660)")
+print("     from years 2023-2024 in this collection.")
+print(f"     Collection: {config.mongodb_database}.{config.mongodb_collection}")
+print()
+response = input("  Do you want to proceed with deletion? (y/n): ").strip().lower()
 
-# === Step 3: Initialize DisclosurePipeline ===
+if response not in ['y', 'yes']:
+    print("  ✗ Deletion cancelled. Exiting showcase.")
+    print("  Note: Existing data will remain in the collection.")
+    exit(0)
 
-print("\n[Step 3] Initializing DisclosurePipeline...")
+# Only delete data for the specific companies and years being processed
+deleted = storage.collection.delete_many({
+    'stock_code': {'$in': ['005930', '000660']},
+    'year': {'$in': ['2023', '2024']}
+})
+print(f"  ✓ Cleared {deleted.deleted_count} existing documents for showcase companies/years")
+
+# === Step 4: Initialize DisclosurePipeline ===
+
+print("\n[Step 4] Initializing DisclosurePipeline...")
 pipeline = DisclosurePipeline(storage_service=storage)
 print(f"  ✓ DisclosurePipeline ready")
 
-# === Step 4: Execute Complete Workflow ===
+# === Step 5: Execute Complete Workflow ===
 
 YEARS = [2023, 2024]
 
-print("\n[Step 4] Executing complete workflow...")
+print("\n[Step 5] Executing complete workflow...")
 print("  Companies: 삼성전자 (005930), SK하이닉스 (000660)")
 print(f"  Years: {YEARS}")
 print("  Report Type: A001 (Annual Reports)")
@@ -93,7 +117,7 @@ stats = pipeline.download_and_parse(
 
 elapsed = (datetime.now() - start_time).total_seconds()
 
-print("\n[Step 5] Workflow Complete!")
+print("\n[Step 6] Workflow Complete!")
 print(f"  ✓ Completed in {elapsed:.1f} seconds")
 print()
 print("  Statistics:")
@@ -103,9 +127,9 @@ print(f"    - Skipped (existing): {stats['skipped']}")
 print(f"    - Failed: {stats['failed']}")
 print()
 
-# === Step 5: Verify Data with TextQuery ===
+# === Step 6: Verify Data with TextQuery ===
 
-print("\n[Step 6] Verifying stored data with TextQuery...")
+print("\n[Step 7] Verifying stored data with TextQuery...")
 query = TextQuery(storage_service=storage)
 
 # Query all years and companies
@@ -144,7 +168,7 @@ for year in sorted(result.keys()):
         else:
             print(f"      {stock_code}: No data found")
 
-# === Step 6: Summary ===
+# === Step 7: Summary ===
 
 print("\n" + "=" * 80)
 print("SHOWCASE COMPLETE")

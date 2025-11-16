@@ -224,6 +224,11 @@ class AppConfig(BaseSettings):
         description="OpenDART API key for accessing DART API"
     )
     
+    corp_list_db_dir: str = Field(
+        default="data/temp",
+        description="Directory path for storing corp_list CSV files"
+    )
+    
     model_config = SettingsConfigDict(
         env_file='.env',
         env_file_encoding='utf-8',

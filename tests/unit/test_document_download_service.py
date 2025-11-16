@@ -30,26 +30,29 @@ def temp_base_dir(tmp_path):
 
 
 @pytest.fixture
-def mock_corp_list():
-    """Mock CorpList with find_by_corp_code method."""
-    mock_list = Mock()
+def mock_corp_list_service():
+    """Mock CorpListService with find_by_corp_code method."""
+    mock_service = Mock()
     
     def find_by_corp_code(corp_code):
-        """Return mock corp with proper string attributes."""
-        mock_corp = Mock()
-        mock_corp.stock_code = "005930"  # Real string, not Mock
-        mock_corp.corp_code = corp_code
-        mock_corp.corp_name = "삼성전자"
-        return mock_corp
+        """Return mock corp data dict."""
+        if corp_code == "00126380":
+            return {
+                'corp_code': '00126380',
+                'corp_name': '삼성전자',
+                'stock_code': '005930'
+            }
+        return None
     
-    mock_list.find_by_corp_code = find_by_corp_code
-    return mock_list
+    mock_service.find_by_corp_code = find_by_corp_code
+    mock_service._initialized = True
+    return mock_service
 
 
 @pytest.fixture(autouse=True)
-def mock_get_corp_list(mock_corp_list):
-    """Mock dart.get_corp_list() for all tests in this module."""
-    with patch('dart_fss_text.services.document_download.dart.get_corp_list', return_value=mock_corp_list):
+def mock_corp_list_service_init(mock_corp_list_service):
+    """Mock CorpListService for all tests in this module."""
+    with patch('dart_fss_text.services.document_download.CorpListService', return_value=mock_corp_list_service):
         yield
 
 
@@ -104,24 +107,15 @@ def test_service_initialization(temp_base_dir):
     assert temp_base_dir.exists()
 
 
-def test_service_lazy_loads_corp_list(temp_base_dir):
-    """Service should lazy-load corp_list on first access."""
-    # Create isolated patch for this specific test
-    with patch('dart_fss_text.services.document_download.dart.get_corp_list') as mock_get:
-        mock_get.return_value = Mock()
-        
-        service = DocumentDownloadService(base_dir=str(temp_base_dir))
-        
-        # Not called on init
-        mock_get.assert_not_called()
-        
-        # Called on first access
-        _ = service.corp_list
-        mock_get.assert_called_once()
-        
-        # Not called again (cached)
-        _ = service.corp_list
-        mock_get.assert_called_once()
+def test_service_requires_corp_list_initialization(temp_base_dir):
+    """Service should require CorpListService to be initialized."""
+    # Mock uninitialized service
+    mock_service = Mock()
+    mock_service._initialized = False
+    
+    with patch('dart_fss_text.services.document_download.CorpListService', return_value=mock_service):
+        with pytest.raises(RuntimeError, match="CorpListService not initialized"):
+            DocumentDownloadService(base_dir=str(temp_base_dir))
 
 
 # ============================================================================
