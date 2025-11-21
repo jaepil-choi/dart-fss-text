@@ -203,33 +203,34 @@ class DocumentDownloadService:
         
         # Verify main XML exists
         if not main_xml.exists():
-            if fallback and xml_files_in_zip:
-                # Use first available XML as fallback
-                fallback_xml_name = xml_files_in_zip[0]
-                fallback_xml_path = filing_dir / fallback_xml_name
-                
-                if fallback_xml_path.exists():
-                    logger.warning(
-                        f"Main XML not found for {rcept_no} ({stock_code} - {corp_name}), "
-                        f"using fallback: {fallback_xml_name}. "
-                        f"Available XMLs: {xml_files_in_zip}"
-                    )
-                    main_xml = fallback_xml_path
-                else:
-                    error_msg = (
-                        f"Main XML not found for {rcept_no} ({stock_code} - {corp_name}): {rcept_no}.xml\n"
-                        f"Fallback XML also not found: {fallback_xml_name}\n"
-                        f"Available XMLs: {xml_files_in_zip}"
-                    )
-                    logger.error(error_msg)
-                    raise FileNotFoundError(error_msg)
-            else:
-                error_msg = (
-                    f"Main XML not found for {rcept_no} ({stock_code} - {corp_name}): {rcept_no}.xml\n"
-                    f"Available XMLs: {xml_files_in_zip}"
-                )
-                logger.error(error_msg)
-                raise FileNotFoundError(error_msg)
+            # FALLBACK LOGIC DISABLED - No longer using alternative XML files
+            # if fallback and xml_files_in_zip:
+            #     # Use first available XML as fallback
+            #     fallback_xml_name = xml_files_in_zip[0]
+            #     fallback_xml_path = filing_dir / fallback_xml_name
+            #
+            #     if fallback_xml_path.exists():
+            #         logger.warning(
+            #             f"Main XML not found for {rcept_no} ({stock_code} - {corp_name}), "
+            #             f"using fallback: {fallback_xml_name}. "
+            #             f"Available XMLs: {xml_files_in_zip}"
+            #         )
+            #         main_xml = fallback_xml_path
+            #     else:
+            #         error_msg = (
+            #             f"Main XML not found for {rcept_no} ({stock_code} - {corp_name}): {rcept_no}.xml\n"
+            #             f"Fallback XML also not found: {fallback_xml_name}\n"
+            #             f"Available XMLs: {xml_files_in_zip}"
+            #         )
+            #         logger.error(error_msg)
+            #         raise FileNotFoundError(error_msg)
+            # else:
+            error_msg = (
+                f"Main XML not found for {rcept_no} ({stock_code} - {corp_name}): {rcept_no}.xml\n"
+                f"Available XMLs: {xml_files_in_zip}"
+            )
+            logger.error(error_msg)
+            raise FileNotFoundError(error_msg)
         
         # Cleanup ZIP
         zip_path.unlink()

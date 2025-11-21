@@ -98,12 +98,13 @@ def download_document(filing, base_dir: str = "data", fallback: bool = True, cor
         logger.error(error_msg)
         raise FileNotFoundError(error_msg)
     
-    # Check if fallback was used
-    main_xml_name = result.main_xml_path.name
-    if main_xml_name != f"{filing.rcept_no}.xml":
-        logger.warning(
-            f"Used fallback XML for {filing.rcept_no} ({stock_code} - {corp_name}): {main_xml_name}"
-        )
+    # FALLBACK LOGIC DISABLED - No longer checking for fallback XML usage
+    # # Check if fallback was used
+    # main_xml_name = result.main_xml_path.name
+    # if main_xml_name != f"{filing.rcept_no}.xml":
+    #     logger.warning(
+    #         f"Used fallback XML for {filing.rcept_no} ({stock_code} - {corp_name}): {main_xml_name}"
+    #     )
     
     logger.info(
         f"Downloaded {filing.rcept_no} ({stock_code} - {corp_name}): "
@@ -389,7 +390,8 @@ class DisclosurePipeline:
         report_type: str = "A001",
         target_section_codes: Optional[List[str]] = None,
         skip_existing: bool = True,
-        base_dir: str = "data"
+        base_dir: str = "data",
+        backfill_only: bool = False
     ) -> Dict[str, int]:
         """
         Complete workflow: search → download → parse → store.
@@ -406,9 +408,12 @@ class DisclosurePipeline:
                                  If specified, only extracts matching sections.
                                  Example: ["020100"] for "1. 사업의 개요"
             skip_existing: If True, skips year+stock_code combinations that already
-                          have downloaded data in base_dir/year/stock_code/.
-                          Saves API calls when resuming. (default: True)
+                          have data in MongoDB. (default: True)
             base_dir: Base directory for downloads (default: "data")
+            backfill_only: If True, ONLY processes existing XML files in base_dir.
+                          Never makes API calls to search or download new data.
+                          Useful for bulk importing existing XML files to MongoDB.
+                          (default: False)
         
         Returns:
             Statistics dictionary:
@@ -453,6 +458,13 @@ class DisclosurePipeline:
                 years=[2023],
                 report_type="A001",
                 skip_existing=True  # Default behavior
+            )
+
+            # Backfill mode: Only process existing XMLs, no API calls
+            stats = pipeline.download_and_parse(
+                years=[2023, 2024],
+                report_type="A001",
+                backfill_only=True  # Only process existing XMLs
             )
         """
         # Validate years is provided
@@ -517,10 +529,9 @@ class DisclosurePipeline:
                 # Check if data already exists in MongoDB (fast set lookup)
                 if skip_existing:
                     if (stock_code, str(year)) in existing_combinations:
-                        logger.info(
-                            f"Skipping {stock_code} ({corp_name}) {year} - "
-                            f"already in MongoDB"
-                        )
+                        skip_msg = f"Skipping {stock_code} ({corp_name}) {year} - already in MongoDB"
+                        logger.info(skip_msg)
+                        print(skip_msg)
                         stats['skipped'] += 1
                         continue  # Skip to next stock_code
                     
@@ -528,10 +539,9 @@ class DisclosurePipeline:
                     data_dir = Path(base_dir) / str(year) / stock_code
                     if data_dir.exists() and any(data_dir.iterdir()):
                         # Process existing XML files directly (backfill mode)
-                        logger.info(
-                            f"Found existing XML files for {stock_code} ({corp_name}) {year} "
-                            f"but not in MongoDB - processing existing files"
-                        )
+                        backfill_msg = f"📁 Found existing XML files for {stock_code} ({corp_name}) {year} - processing..."
+                        logger.info(backfill_msg)
+                        print(backfill_msg)
                         
                         # Process each existing XML file
                         for rcept_dir in sorted(data_dir.iterdir()):
@@ -546,23 +556,24 @@ class DisclosurePipeline:
                                 logger.debug(f"Skipping {rcept_no} - already in MongoDB")
                                 continue
                             
-                            # Find XML file (main or fallback)
+                            # Find XML file (main only, no fallback)
                             main_xml = rcept_dir / f"{rcept_no}.xml"
                             xml_path = None
-                            
+
                             if main_xml.exists():
                                 xml_path = main_xml
-                            else:
-                                # Try fallback XMLs
-                                xml_files = sorted(rcept_dir.glob("*.xml"))
-                                if xml_files:
-                                    xml_path = xml_files[0]
-                                    logger.warning(
-                                        f"Main XML not found for {rcept_no}, using fallback: {xml_path.name}"
-                                    )
-                            
+                            # FALLBACK LOGIC DISABLED - No longer using alternative XML files
+                            # else:
+                            #     # Try fallback XMLs
+                            #     xml_files = sorted(rcept_dir.glob("*.xml"))
+                            #     if xml_files:
+                            #         xml_path = xml_files[0]
+                            #         logger.warning(
+                            #             f"Main XML not found for {rcept_no}, using fallback: {xml_path.name}"
+                            #         )
+
                             if not xml_path or not xml_path.exists():
-                                logger.warning(f"No XML found for {rcept_no} in {rcept_dir}")
+                                logger.warning(f"Main XML {rcept_no}.xml not found in {rcept_dir}")
                                 continue
                             
                             # Create mock filing object
@@ -586,23 +597,21 @@ class DisclosurePipeline:
                             
                             # Parse and store existing XML
                             try:
-                                logger.info(
-                                    f"Processing existing XML {xml_path.name} for {rcept_no} "
-                                    f"({stock_code} - {corp_name})"
-                                )
-                                
+                                parse_msg = f"  → Parsing XML {xml_path.name} for {stock_code} ({corp_name})"
+                                logger.info(parse_msg)
+                                print(parse_msg)
+
                                 sections = parse_xml_to_sections(
                                     xml_path=xml_path,
                                     filing=filing,
                                     report_type=report_type,
                                     target_section_codes=target_section_codes
                                 )
-                                
+
                                 if len(sections) == 0:
-                                    logger.warning(
-                                        f"⚠️  No sections parsed from existing XML {xml_path.name} "
-                                        f"for {rcept_no} ({stock_code} - {corp_name})"
-                                    )
+                                    warn_msg = f"  ⚠️  No sections parsed from {xml_path.name} for {stock_code} ({corp_name})"
+                                    logger.warning(warn_msg)
+                                    print(warn_msg)
                                     failures_by_year[year].append({
                                         'corp_code': corp_data['corp_code'],
                                         'stock_code': stock_code,
@@ -615,14 +624,14 @@ class DisclosurePipeline:
                                     })
                                     stats['failed'] += 1
                                     continue
-                                
+
+                                parsed_msg = f"  ✓ Parsed {len(sections)} sections from {xml_path.name}"
+                                logger.info(parsed_msg)
+                                print(parsed_msg)
+
                                 # Store sections
                                 self._storage.insert_sections(sections)
-                                logger.info(
-                                    f"Stored {len(sections)} sections from existing XML {xml_path.name} "
-                                    f"for {rcept_no} ({stock_code} - {corp_name})"
-                                )
-                                
+
                                 stats['reports'] += 1
                                 stats['sections'] += len(sections)
                                 
@@ -648,7 +657,12 @@ class DisclosurePipeline:
                         
                         # After processing existing files, continue to next stock_code
                         continue
-                
+
+                # Skip API calls if backfill_only mode
+                if backfill_only:
+                    logger.debug(f"Backfill-only mode: skipping API search for {stock_code} ({corp_name}) {year}")
+                    continue
+
                 try:
                     # Search filings via API (for files not yet downloaded)
                     request = SearchFilingsRequest(
@@ -687,46 +701,35 @@ class DisclosurePipeline:
                             )
                             
                             # Parse
-                            logger.debug(
-                                f"Parsing XML {xml_path.name} for {filing.rcept_no} "
-                                f"({stock_code} - {corp_name})"
-                            )
+                            parse_msg = f"  → Parsing XML {xml_path.name} for {stock_code} ({corp_name})"
+                            logger.info(parse_msg)
+                            print(parse_msg)
+
                             sections = parse_xml_to_sections(
-                                xml_path, 
-                                filing, 
+                                xml_path,
+                                filing,
                                 report_type=report_type,
                                 target_section_codes=target_section_codes
                             )
-                            
+
                             # Warn if no sections were parsed
                             if len(sections) == 0:
-                                logger.warning(
-                                    f"⚠️  No sections parsed from {filing.rcept_no} "
-                                    f"({stock_code} - {corp_name})! "
-                                    f"XML file: {xml_path.name}. "
-                                    f"This may indicate a parsing issue or missing target sections."
-                                )
+                                warn_msg = f"  ⚠️  No sections parsed from {xml_path.name} for {stock_code} ({corp_name})"
+                                logger.warning(warn_msg)
+                                print(warn_msg)
                             else:
-                                logger.debug(
-                                    f"Parsed {len(sections)} sections from {filing.rcept_no} "
-                                    f"({stock_code} - {corp_name})"
-                                )
-                            
+                                parsed_msg = f"  ✓ Parsed {len(sections)} sections from {xml_path.name}"
+                                logger.info(parsed_msg)
+                                print(parsed_msg)
+
                             # Store (even if empty - insert_sections handles empty lists)
                             self._storage.insert_sections(sections)
-                            
-                            if len(sections) > 0:
-                                logger.info(
-                                    f"Stored {len(sections)} sections from {filing.rcept_no} "
-                                    f"({stock_code} - {corp_name})"
-                                )
-                            else:
-                                logger.warning(
-                                    f"⚠️  Stored 0 sections from {filing.rcept_no} "
-                                    f"({stock_code} - {corp_name}) - "
-                                    f"report counted but no data stored!"
-                                )
-                            
+
+                            if len(sections) == 0:
+                                warn_msg = f"  ⚠️  Stored 0 sections from {filing.rcept_no} ({stock_code} - {corp_name})"
+                                logger.warning(warn_msg)
+                                print(warn_msg)
+
                             # Update statistics
                             stats['reports'] += 1
                             stats['sections'] += len(sections)

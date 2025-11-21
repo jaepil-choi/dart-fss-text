@@ -10,11 +10,14 @@ Handles all MongoDB operations for storing and retrieving parsed sections:
 
 from typing import List, Dict, Optional, Any
 from datetime import datetime
+import logging
 from pymongo import MongoClient, ASCENDING
-from pymongo.errors import DuplicateKeyError, ConnectionFailure, PyMongoError
+from pymongo.errors import DuplicateKeyError, ConnectionFailure, PyMongoError, DocumentTooLarge
 
 from dart_fss_text.models import SectionDocument
 from dart_fss_text.config import get_app_config
+
+logger = logging.getLogger(__name__)
 
 
 class StorageService:
@@ -127,15 +130,20 @@ class StorageService:
         try:
             # Convert SectionDocument to dict
             mongo_docs = [doc.to_mongo_dict() for doc in documents]
-            
+
             # Insert to MongoDB
             result = self.collection.insert_many(mongo_docs)
-            
+
+            # Log and print successful insertion
+            msg = f"  ✓ Inserted {len(result.inserted_ids)} sections to MongoDB"
+            logger.info(msg)
+            print(msg)
+
             return {
                 'success': True,
                 'inserted_count': len(result.inserted_ids)
             }
-        
+
         except DuplicateKeyError as e:
             # Truncate error message to prevent printing full documents
             error_msg = str(e)
@@ -146,10 +154,63 @@ class StorageService:
                 'inserted_count': 0,
                 'error': f"Duplicate key error: {error_msg}"
             }
-        
-        except PyMongoError as e:
-            # Truncate error message to prevent printing full documents
-            error_msg = str(e)
+
+        except (DocumentTooLarge, PyMongoError) as e:
+            error_str = str(e)
+
+            # Check if this is a BSON document size error
+            if "document too large" in error_str.lower() or "bson" in error_str.lower():
+                warn_msg = f"  ⚠️  BSON document too large - attempting text truncation and retry..."
+                logger.warning(warn_msg)
+                print(warn_msg)
+
+                # Truncate text fields and retry
+                MAX_TEXT_LENGTH = 50_000
+                truncated_docs = []
+                truncated_count = 0
+
+                for doc in documents:
+                    if len(doc.text) > MAX_TEXT_LENGTH:
+                        truncated_count += 1
+                        truncate_msg = f"    → Truncating {doc.document_id} from {len(doc.text):,} to {MAX_TEXT_LENGTH:,} chars"
+                        logger.warning(truncate_msg)
+                        print(truncate_msg)
+                        # Create new document with truncated text
+                        truncated_text = doc.text[:MAX_TEXT_LENGTH] + f"\n\n[... TRUNCATED - Original length: {len(doc.text):,} chars]"
+                        doc_dict = doc.model_dump()
+                        doc_dict['text'] = truncated_text
+                        # Update char_count and word_count to match truncated text
+                        doc_dict['char_count'] = len(truncated_text)
+                        doc_dict['word_count'] = len(truncated_text.split())
+                        truncated_doc = SectionDocument(**doc_dict)
+                        truncated_docs.append(truncated_doc)
+                    else:
+                        truncated_docs.append(doc)
+
+                # Retry insertion with truncated documents
+                try:
+                    mongo_docs_truncated = [doc.to_mongo_dict() for doc in truncated_docs]
+                    result = self.collection.insert_many(mongo_docs_truncated)
+                    success_msg = f"  ✓ Successfully inserted {len(result.inserted_ids)} sections after truncating {truncated_count} documents"
+                    logger.info(success_msg)
+                    print(success_msg)
+                    return {
+                        'success': True,
+                        'inserted_count': len(result.inserted_ids),
+                        'truncated': True
+                    }
+                except PyMongoError as retry_error:
+                    error_msg = str(retry_error)
+                    if len(error_msg) > 500:
+                        error_msg = error_msg[:500] + "... (truncated)"
+                    return {
+                        'success': False,
+                        'inserted_count': 0,
+                        'error': f"MongoDB error after truncation retry: {error_msg}"
+                    }
+
+            # Other MongoDB errors
+            error_msg = error_str
             if len(error_msg) > 500:
                 error_msg = error_msg[:500] + "... (truncated)"
             return {
